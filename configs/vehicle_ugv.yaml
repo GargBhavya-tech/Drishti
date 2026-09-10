@@ -1,0 +1,23 @@
+# configs/vehicle_ugv.yaml — Ticket #9.
+#
+# These are DECLARED PLATFORM PARAMETERS, not tuned constants. Every one
+# of them is either a stated sponsor/vehicle requirement or a measured
+# quantity. Any code outside this file (and tests/) that hardcodes one of
+# these values is a bug -- the "the map is vehicle-agnostic, the cost map
+# is not" argument in the Bible depends on this file being the single
+# source. See tests/test_vehicle_config.py, which greps the repo for the
+# literals below and fails if it finds any outside this file.
+
+max_slope_deg: 25
+max_step_height_m: 0.20
+min_clearance_m: 2.50
+ground_clearance_m: 0.35
+width_m: 2.10
+max_roughness_m: 0.08
+
+min_object_t_m: 1.00      # feeds r_blind (Ticket #38 — sparsity/blind-range)
+min_object_w_m: 0.10
+
+braking_a_ms2: 4.0         # feeds the speed envelope (Ticket #40)
+t_react_s: 0.30            # placeholder until Ticket #55 measures P95 pipeline
+                            # latency and this gets wired from that instead
