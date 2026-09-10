@@ -1,8 +1,14 @@
 """
 perception/train.py
 
-Ticket #30 -- train FusionSegNet on RELLIS-3D sequence 00004 (preferred
-over nuScenes-mini per this ticket's own spec, since #3 has landed).
+Ticket #30 -- train FusionSegNet on RELLIS-3D (preferred over
+nuScenes-mini per this ticket's own spec, since #3 has landed).
+
+Supports one or more sequence directories (--sequence-dir accepts
+multiple paths). Each sequence is split train/val independently (last
+15% by index, per sequence -- see Val split note below) and the splits
+are concatenated, so held-out frames always come from the tail of
+their own sequence's route rather than leaking across sequences.
 
 AdamW + OneCycleLR + mixed precision. Checkpoints every epoch to
 `--out-dir` and resumes automatically if a checkpoint is already there --
@@ -61,6 +67,21 @@ def split_frames(n_frames: int, val_fraction: float = VAL_FRACTION):
     return train_idx, val_idx
 
 
+def build_multi_sequence_splits(sequence_dirs: list[Path], bin_dirname: str = "os1_cloud_node_kitti_bin"):
+    """Per-sequence train/val split (see module docstring), concatenated
+    into (seq_dir, frame_idx) item lists across all sequences."""
+    train_items: list[tuple[Path, int]] = []
+    val_items: list[tuple[Path, int]] = []
+    per_seq_counts: list[tuple[Path, int]] = []
+    for seq_dir in sequence_dirs:
+        n_frames = len(list((seq_dir / bin_dirname).glob("*.bin")))
+        train_idx, val_idx = split_frames(n_frames)
+        train_items.extend((seq_dir, i) for i in train_idx)
+        val_items.extend((seq_dir, i) for i in val_idx)
+        per_seq_counts.append((seq_dir, n_frames))
+    return train_items, val_items, per_seq_counts
+
+
 def _load_frame(sequence_dir: Path, frame_idx: int, sm: SensorConfig):
     sweep = load_rellis_sweep(sequence_dir, frame_idx)
     raw_labels = load_rellis_labels(sequence_dir, frame_idx)
@@ -79,20 +100,20 @@ def _load_frame(sequence_dir: Path, frame_idx: int, sm: SensorConfig):
 
 class RellisSegDataset(Dataset):
     """One item = one frame: (input_tensor (9,H,W), target (H,W) int64,
-    valid_mask (H,W) bool)."""
+    valid_mask (H,W) bool). `items` is a list of (sequence_dir, frame_idx)
+    pairs, so a single dataset can span multiple RELLIS-3D sequences."""
 
-    def __init__(self, sequence_dir: Path, frame_indices, sm: SensorConfig, stats: ChannelStats):
-        self.sequence_dir = Path(sequence_dir)
-        self.frame_indices = list(frame_indices)
+    def __init__(self, items: list, sm: SensorConfig, stats: ChannelStats):
+        self.items = list(items)
         self.sm = sm
         self.stats = stats
 
     def __len__(self):
-        return len(self.frame_indices)
+        return len(self.items)
 
     def __getitem__(self, i: int):
-        frame_idx = self.frame_indices[i]
-        img, ground, target = _load_frame(self.sequence_dir, frame_idx, self.sm)
+        sequence_dir, frame_idx = self.items[i]
+        img, ground, target = _load_frame(sequence_dir, frame_idx, self.sm)
         tensor = assemble_input_tensor(img, ground, self.stats)
         return (
             torch.from_numpy(tensor).float(),
@@ -101,12 +122,12 @@ class RellisSegDataset(Dataset):
         )
 
 
-def compute_class_pixel_counts(sequence_dir: Path, frame_indices, sm: SensorConfig, n_classes: int, sample_every: int = 1):
+def compute_class_pixel_counts(items: list, sm: SensorConfig, n_classes: int, sample_every: int = 1):
     """Ticket #30 'Watch out': check rare classes aren't collapsing to
     zero IoU before burning hours -- pixel counts per class over (a
     sample of) the training split, printed before training starts."""
     counts = np.zeros(n_classes, dtype=np.int64)
-    for frame_idx in frame_indices[::sample_every]:
+    for sequence_dir, frame_idx in items[::sample_every]:
         img, _, target = _load_frame(sequence_dir, frame_idx, sm)
         valid_target = target[img.valid_mask]
         for c in range(n_classes):
@@ -163,7 +184,7 @@ def load_checkpoint_if_exists(path: Path, model, optimizer, scheduler, scaler, d
 
 
 def train(
-    sequence_dir: str,
+    sequence_dir,
     sensor_config_path: str,
     out_dir: str,
     epochs: int = 20,
@@ -186,18 +207,17 @@ def train(
             f"batch_size must be >= 2 (got {batch_size}) -- ASPP's global-pool "
             f"branch + BatchNorm2d cannot train on a single sample per batch."
         )
-    sequence_dir = Path(sequence_dir)
+    sequence_dirs = [Path(sequence_dir)] if isinstance(sequence_dir, (str, Path)) else [Path(p) for p in sequence_dir]
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     sm = load_sensor_config(sensor_config_path)
 
-    bin_dir = sequence_dir / "os1_cloud_node_kitti_bin"
-    n_frames = len(list(bin_dir.glob("*.bin")))
-    train_idx, val_idx = split_frames(n_frames)
-    print(f"Training on {len(train_idx)} frames from RELLIS-3D {sequence_dir.name} "
-          f"(held out {len(val_idx)} frames, last {VAL_FRACTION:.0%} by index)")
+    train_items, val_items, per_seq_counts = build_multi_sequence_splits(sequence_dirs)
+    seq_names = ", ".join(f"{d.name} ({n} frames)" for d, n in per_seq_counts)
+    print(f"Training on {len(train_items)} frames from RELLIS-3D [{seq_names}] "
+          f"(held out {len(val_items)} frames total, last {VAL_FRACTION:.0%} by index, per sequence)")
 
     stats_path = out_dir / "channel_stats.json"
     if stats_path.exists():
@@ -205,15 +225,15 @@ def train(
         print(f"Loaded channel stats from {stats_path} (not recomputed)")
     else:
         raw_stacks = []
-        for frame_idx in train_idx[:: max(1, len(train_idx) // max_stats_frames)][:max_stats_frames]:
-            img, ground, _ = _load_frame(sequence_dir, frame_idx, sm)
+        for sequence_dir_i, frame_idx in train_items[:: max(1, len(train_items) // max_stats_frames)][:max_stats_frames]:
+            img, ground, _ = _load_frame(sequence_dir_i, frame_idx, sm)
             raw_stacks.append(_raw_channels(img, ground_prior_channel_from_points(img, ground)))
         stats = compute_channel_stats(raw_stacks)
         save_stats(stats, stats_path)
         print(f"Computed channel stats from {len(raw_stacks)} frames, saved to {stats_path}")
 
     class_counts = compute_class_pixel_counts(
-        sequence_dir, train_idx, sm, N_CLASSES_DEFAULT, sample_every=max(1, len(train_idx) // 50)
+        train_items, sm, N_CLASSES_DEFAULT, sample_every=max(1, len(train_items) // 50)
     )
     print("Per-class pixel counts (sampled train frames):")
     zero_classes = []
@@ -225,8 +245,8 @@ def train(
         print(f"WARNING: classes {zero_classes} have ZERO pixels in the sampled training data -- "
               f"they cannot learn anything and will report IoU=NaN. Check before burning GPU hours.")
 
-    train_ds = RellisSegDataset(sequence_dir, train_idx, sm, stats)
-    val_ds = RellisSegDataset(sequence_dir, val_idx, sm, stats)
+    train_ds = RellisSegDataset(train_items, sm, stats)
+    val_ds = RellisSegDataset(val_items, sm, stats)
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
     val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=num_workers)
 
@@ -310,8 +330,8 @@ def train(
                     "epoch": epoch,
                     "miou": miou,
                     "per_class_iou": [None if np.isnan(v) else float(v) for v in ious],
-                    "train_set_size": len(train_idx),
-                    "val_set_size": len(val_idx),
+                    "train_set_size": len(train_items),
+                    "val_set_size": len(val_items),
                     "majority_class_baseline_class": majority_class,
                 },
                 f,
@@ -321,7 +341,7 @@ def train(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Ticket #30 -- train FusionSegNet on RELLIS-3D")
-    parser.add_argument("--sequence-dir", required=True)
+    parser.add_argument("--sequence-dir", required=True, nargs="+", help="One or more RELLIS-3D sequence directories")
     parser.add_argument("--sensor-config", default="configs/sensor_ouster_os1_64.yaml")
     parser.add_argument("--out-dir", default="checkpoints")
     parser.add_argument("--epochs", type=int, default=20)

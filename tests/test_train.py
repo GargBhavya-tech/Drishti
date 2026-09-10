@@ -9,12 +9,13 @@ correctly from a killed session."
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from perception.train import load_checkpoint_if_exists, split_frames, train
+from perception.train import build_multi_sequence_splits, load_checkpoint_if_exists, split_frames, train
 from perception.segnet import FusionSegNet, N_CLASSES_DEFAULT
 
 CONFIGS = Path(__file__).resolve().parents[1] / "configs"
@@ -29,11 +30,11 @@ def test_split_is_contiguous_last_fraction_not_shuffled():
     assert max(train_idx) < min(val_idx)
 
 
-def _make_fake_sequence(root: Path, n_frames: int = 6) -> Path:
+def _make_fake_sequence(root: Path, n_frames: int = 6, seq_name: str = "00004") -> Path:
     """A tiny fake RELLIS-3D-shaped sequence: real label IDs (void, grass,
     vehicle) so multiple DRISHTI classes are actually present, matching
     the format perception.rellis_loader expects."""
-    seq = root / "00004"
+    seq = root / seq_name
     bin_dir = seq / "os1_cloud_node_kitti_bin"
     label_dir = seq / "os1_cloud_node_semantickitti_label_id"
     bin_dir.mkdir(parents=True)
@@ -172,3 +173,45 @@ def test_resumes_correctly_from_a_killed_session(tmp_path):
         scheduler=None, scaler=None, device="cpu",
     )
     assert final_epoch == 2, "checkpoint should now reflect epoch 1 completed (resume point = 2)"
+
+
+def test_build_multi_sequence_splits_keeps_val_within_each_sequence_tail(tmp_path):
+    seq_a = _make_fake_sequence(tmp_path, n_frames=10, seq_name="00000")
+    seq_b = _make_fake_sequence(tmp_path, n_frames=6, seq_name="00001")
+
+    train_items, val_items, per_seq_counts = build_multi_sequence_splits([seq_a, seq_b])
+
+    assert per_seq_counts == [(seq_a, 10), (seq_b, 6)]
+    # split_frames(10, 0.15) -> 2 val; split_frames(6, 0.15) -> 1 val.
+    assert len(train_items) == 8 + 5
+    assert len(val_items) == 2 + 1
+    # Held-out frames for each sequence come from the tail of THAT
+    # sequence, not a globally shuffled pool -- no cross-sequence leakage.
+    val_by_seq = {seq_a: [], seq_b: []}
+    for seq_dir, frame_idx in val_items:
+        val_by_seq[seq_dir].append(frame_idx)
+    assert val_by_seq[seq_a] == [8, 9]
+    assert val_by_seq[seq_b] == [5]
+
+
+def test_training_smoke_run_across_multiple_sequences(tmp_path):
+    seq_a = _make_fake_sequence(tmp_path, n_frames=6, seq_name="00000")
+    seq_b = _make_fake_sequence(tmp_path, n_frames=6, seq_name="00001")
+    out_dir = tmp_path / "checkpoints"
+
+    train(
+        sequence_dir=[str(seq_a), str(seq_b)],
+        sensor_config_path=str(CONFIGS / "sensor_hdl32e.yaml"),
+        out_dir=str(out_dir),
+        epochs=1,
+        batch_size=2,
+        num_workers=0,
+        device="cpu",
+        max_stats_frames=3,
+    )
+
+    assert (out_dir / "checkpoint.pt").exists()
+    metrics = json.loads((out_dir / "val_metrics_epoch0.json").read_text())
+    # 2 sequences x 6 frames each, split_frames(6, 0.15) -> 1 val, 5 train each.
+    assert metrics["train_set_size"] == 10
+    assert metrics["val_set_size"] == 2
