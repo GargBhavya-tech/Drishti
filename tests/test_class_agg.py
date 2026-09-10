@@ -89,10 +89,16 @@ def test_no_mean_or_average_anywhere_in_the_class_aggregation_path():
         src = inspect.getsource(fn)
         tree = ast.parse(src)
         func_def = tree.body[0]
-        # Drop the docstring (first statement, if it's a bare string
-        # expression) before scanning for averaging calls in real code.
-        body = func_def.body[1:] if ast.get_docstring(func_def) else func_def.body
-        code_only = "\n".join(ast.unparse(stmt) for stmt in body)
+        # Drop the docstring by its LINE RANGE, not by string-matching its
+        # text -- ast.get_docstring() returns a cleaned/dedented string
+        # that won't match the raw indented source verbatim. lineno/
+        # end_lineno are available since Python 3.8 (this server-side
+        # test needs to run there too; ast.unparse does not).
+        lines = src.splitlines()
+        if ast.get_docstring(func_def) is not None:
+            first_stmt = func_def.body[0]
+            lines = lines[: first_stmt.lineno - 1] + lines[first_stmt.end_lineno :]
+        code_only = "\n".join(lines)
         assert ".mean(" not in code_only
         assert "np.mean" not in code_only
         assert "torch.mean" not in code_only

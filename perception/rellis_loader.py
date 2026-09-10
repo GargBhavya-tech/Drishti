@@ -130,3 +130,20 @@ def load_rellis_sweep(
         T_world=T_world,
         sensor_id=sensor_id,
     )
+
+
+def load_rellis_labels(sequence_dir: str | Path, frame_idx: int, sensor_stream: str = "os1") -> np.ndarray:
+    """Ticket #30 -- raw per-point label IDs for one frame, SemanticKITTI
+    convention (uint32, class id in the low 16 bits; upper 16 bits are an
+    instance id this project doesn't use). NOT run through the DRISHTI
+    taxonomy remap here -- that's perception.taxonomy.
+    rellis_label_ids_to_drishti's job, kept separate so this stays a
+    thin, format-only reader.
+    """
+    sequence_dir = Path(sequence_dir)
+    label_dir_name = {"os1": "os1_cloud_node_semantickitti_label_id", "vel": "vel_cloud_node_semantickitti_label_id"}[
+        sensor_stream
+    ]
+    label_path = sequence_dir / label_dir_name / f"{frame_idx:06d}.label"
+    raw = np.fromfile(str(label_path), dtype=np.uint32)
+    return raw & 0xFFFF  # low 16 bits = semantic class id
