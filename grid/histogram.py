@@ -5,13 +5,16 @@ Ticket #20 -- 8-bin per-cell height histogram, feeding Ticket #21's
 ground/gap/ceiling extraction (Claim 1: multi-layer cells, Bible Part 9.2).
 
 Bin width must be DERIVED, not a literal (Ticket #20 "Watch out"). The
-Bible's own worked range is [z_ground - 0.5, z_ground + 4.0] m -> bin
-width 0.5625 m for `vehicle_ugv.yaml`'s min_clearance_m = 2.50 m. That
-0.5625 is not a coincidence: 4.0 = min_clearance_m + 1.5 m headroom
-margin, and 0.5625 = (4.0 - (-0.5)) / 8. This module computes the range
-from `min_clearance_m` and derives bin width from it, rather than typing
-0.5625 in directly -- so a different vehicle config regenerates a
-correctly-scaled histogram automatically.
+Bible's own worked range runs from half a metre below local ground to
+`min_clearance_m` plus a headroom margin above it -- see the Build Map's
+Ticket #20 text for the exact worked figures against `vehicle_ugv.yaml`.
+This module computes the upper bound from `min_clearance_m` at call
+time and derives bin width from THAT (span / n_bins), rather than typing
+the resulting numbers in directly -- so a different vehicle config
+regenerates a correctly-scaled histogram automatically. (Deliberately no
+literal vehicle-parameter values appear in this docstring -- see
+tests/test_vehicle_config.py's watched-literal guard, which greps for
+exactly that outside configs/ and tests/.)
 
 Relative to LOCAL ground, not z=0 (Ticket #20 "Watch out") -- on a slope,
 an absolute-z histogram puts everything in one bin. `z_ground` here is

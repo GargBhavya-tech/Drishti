@@ -68,14 +68,20 @@ if [[ -n "${POSES_ID}" ]]; then
 fi
 
 echo "Extracting only sequence ${SEQ} from each archive..."
-unzip -q "${DEST}/${STREAM}_kitti_format.zip" "${SEQ}/*" -d "${DEST}/extract_cloud" || \
-  { echo "If the archive's internal paths don't start with '${SEQ}/', inspect it with 'unzip -l' and adjust the pattern above."; exit 1; }
-unzip -q "${DEST}/${STREAM}_labels.zip" "${SEQ}/*" -d "${DEST}/extract_labels" || true
-[[ -n "${POSES_ID}" ]] && unzip -q "${DEST}/${STREAM}_poses.zip" "${SEQ}/*" -d "${DEST}/extract_poses" || true
+# CONFIRMED against a real download (2026-09-10): the archives' internal
+# paths are prefixed with "Rellis-3D/", e.g. "Rellis-3D/00004/os1_cloud_
+# node_kitti_bin/000000.bin" -- NOT "00004/..." directly at the zip root
+# as originally assumed here. Without the prefix, unzip's pattern silently
+# matches nothing and the script "succeeds" with an empty FINAL directory.
+ARCHIVE_PREFIX="Rellis-3D"
+unzip -q "${DEST}/${STREAM}_kitti_format.zip" "${ARCHIVE_PREFIX}/${SEQ}/*" -d "${DEST}/extract_cloud" || \
+  { echo "If the archive's internal paths don't start with '${ARCHIVE_PREFIX}/${SEQ}/', inspect it with 'unzip -l' and adjust the pattern above."; exit 1; }
+unzip -q "${DEST}/${STREAM}_labels.zip" "${ARCHIVE_PREFIX}/${SEQ}/*" -d "${DEST}/extract_labels" || true
+[[ -n "${POSES_ID}" ]] && unzip -q "${DEST}/${STREAM}_poses.zip" "${ARCHIVE_PREFIX}/${SEQ}/*" -d "${DEST}/extract_poses" || true
 
-cp -r "${DEST}/extract_cloud/${SEQ}/." "${FINAL}/" 2>/dev/null || true
-cp -r "${DEST}/extract_labels/${SEQ}/." "${FINAL}/" 2>/dev/null || true
-cp -r "${DEST}/extract_poses/${SEQ}/." "${FINAL}/" 2>/dev/null || true
+cp -r "${DEST}/extract_cloud/${ARCHIVE_PREFIX}/${SEQ}/." "${FINAL}/" 2>/dev/null || true
+cp -r "${DEST}/extract_labels/${ARCHIVE_PREFIX}/${SEQ}/." "${FINAL}/" 2>/dev/null || true
+cp -r "${DEST}/extract_poses/${ARCHIVE_PREFIX}/${SEQ}/." "${FINAL}/" 2>/dev/null || true
 
 echo "Once this settles, delete ${DEST} (the full-archive downloads) --"
 echo "you only need ${FINAL} going forward. That's where the loader expects:"
