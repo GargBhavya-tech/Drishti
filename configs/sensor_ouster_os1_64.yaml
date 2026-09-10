@@ -1,0 +1,41 @@
+# Ouster OS1-64 — RELLIS-3D's primary sensor (Ticket #3).
+#
+# UNVERIFIED. d_theta_rad and d_phi_rad below are PLACEHOLDERS, not
+# datasheet-confirmed numbers — no source consulted while building this
+# repo could confirm them. Do not trust any number computed from this
+# config (schedule radii, r_blind, safe speeds, ...) until Ticket #6
+# (point-distribution gate) has been re-run against real RELLIS-3D scans,
+# which is what actually measures d_theta/d_phi from the data itself.
+# See DRISHTI_Build_Map.md, Ticket #3 and Ticket #6, for why measuring
+# beats assuming here.
+
+sensor_id: ouster_os1_64
+
+n_beams: 64
+
+# TODO: measure via Ticket #6. Ouster's azimuth resolution is a firmware
+# setting (512/1024/2048 columns/rev are common), not a fixed datasheet
+# constant the way Velodyne's is — this placeholder assumes 1024 columns/rev,
+# i.e. 360/1024 deg, and MUST be confirmed against the actual RELLIS-3D
+# capture settings before use.
+d_theta_deg: 0.3516           # placeholder: 360/1024
+d_theta_rad: 0.006136923151878959
+
+# TODO: measure via Ticket #6. Ouster OS1-64 vertical FOV is commonly
+# quoted as ~45 deg (+-22.5 deg) with non-uniform beam spacing across
+# that range, unlike Velodyne's uniform d_phi. A single d_phi here is a
+# simplification that Ticket #6 should either confirm as adequate or
+# replace with a real beam_elevations table.
+d_phi_deg: 0.71                # placeholder: 45 / 63 (uniform-spacing approximation)
+d_phi_rad: 0.012392241542243866
+
+phi_max_deg: 22.5              # placeholder, per common OS1-64 spec sheets
+h_m: null                      # TODO: measure from RELLIS-3D calibration/TF, same
+                                # method as Ticket #7 uses for the HDL-32E
+
+usable_range_m: null           # TODO: measure. RELLIS-3D range is terrain-limited
+                                # (vegetation, elevation) rather than hardware-limited
+                                # — see Build Map sensor-config table note. Do not
+                                # assume this equals a spec-sheet max range.
+
+beam_elevations: null

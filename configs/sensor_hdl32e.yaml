@@ -1,0 +1,22 @@
+# Velodyne HDL-32E — nuScenes' sensor. Primary config for D1–D5; nuScenes-mini
+# is the dataset available immediately (Ticket #2).
+
+sensor_id: hdl32e
+
+n_beams: 32
+d_theta_deg: 0.3333
+d_theta_rad: 0.005818145080604945
+
+d_phi_deg: 1.3335
+d_phi_rad: 0.023273959697808403
+
+phi_max_deg: 10.0
+h_m: 1.84                    # TODO: replace with the measured value from Ticket #7
+                              # (calibrated_sensor table + ground-plane fit cross-check).
+                              # 1.84 is a placeholder pending that measurement.
+
+usable_range_m: 70.0         # measured practical return range, not the ~80-100m
+                              # spec figure — see Build Map "Two/Three Sensor Configs"
+                              # for why this matters to Claim 2 and Claim 4.
+
+beam_elevations: null

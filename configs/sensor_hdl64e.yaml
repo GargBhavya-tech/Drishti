@@ -1,0 +1,21 @@
+# Velodyne HDL-64E — SemanticKITTI's sensor.
+# Reference config. Numbers from the published datasheet, used throughout
+# the Bible and Build Map as the "64-beam-class" case. Only exactly
+# applicable if SemanticKITTI itself lands (Ticket #3's original plan,
+# now detached — see DRISHTI_Build_Map.md).
+
+sensor_id: hdl64e
+
+n_beams: 64
+d_theta_deg: 0.1728          # horizontal angular resolution
+d_theta_rad: 0.0030159289474462015
+
+d_phi_deg: 0.4254            # vertical beam spacing
+d_phi_rad: 0.007424630637983878
+
+phi_max_deg: 2.0             # approx. top-beam elevation above horizontal
+h_m: 1.73                    # mount height above ground plane, from datasheet
+
+usable_range_m: 120.0        # practical usable return range
+
+beam_elevations: null        # not modelled per-beam in v1; uniform d_phi assumed

@@ -1,0 +1,11 @@
+numpy
+scipy
+torch
+torchvision
+rerun-sdk
+pytest
+hypothesis
+matplotlib
+nuscenes-devkit
+pyyaml
+tqdm
