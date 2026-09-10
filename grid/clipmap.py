@@ -275,3 +275,32 @@ class Clipmap:
 
         # Outside every level's window.
         return None, CellView.unobserved(level=None)
+
+    # ------------------------------------------------------------------
+    # Tickets #33-34 -- observability write path (separate from scatter()'s
+    # height/class writes, Ticket #18-19; ray carving never touches
+    # h_min/h_max/etc, only the flags byte's observability sub-field).
+    # ------------------------------------------------------------------
+
+    def mark_observability(self, level: int, gi: int, gj: int, obs_state: int) -> bool:
+        """Write the observability sub-field of `flags` for one cell at
+        (level, gi, gj), identified by GLOBAL index (Ticket #10). Returns
+        False (no write performed) if (gi, gj) falls outside this level's
+        CURRENT window -- writing there would alias, via toroidal wrap,
+        onto a completely different global cell's storage slot (Bible
+        Part 8's warning about stale/foreign data), so out-of-window
+        writes are silently skipped rather than corrupting unrelated
+        cells. Always refreshes `stamp` alongside `flags`, exactly like
+        `grid.scatter._write_touched_cells` -- an update to `flags`
+        without a matching `stamp` update would make `lookup()`'s
+        integrity cross-check (Ticket #14) treat this cell as corrupted
+        on its very next read.
+        """
+        oi, oj = self.origin_i[level], self.origin_j[level]
+        if not (oi <= gi < oi + self.N and oj <= gj < oj + self.N):
+            return False
+        si, sj = global_to_storage(gi, gj, self.N)
+        flat = flat_index(si, sj, self.N)
+        self.flags[level, flat] = np.uint8(obs_state)
+        self.stamp[level, flat] = expected_stamp(gi, gj, self.N)
+        return True
