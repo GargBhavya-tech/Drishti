@@ -1,194 +1,307 @@
 # DRISHTI — Session Handoff
 
-**Written:** 2026-09-10, end of a single long build session.
-**Purpose:** let a fresh Claude Code session (or a human) pick up exactly where this one left off, with zero prior context, and get training running.
+**Written:** 2026-09-10 → updated 2026-09-11, end of a second long build session (continuation of the first).
+**Purpose:** let a fresh Claude Code session (or a human) pick up exactly where this one left off, with zero prior context.
 
 Read `DRISHTI_Project_Bible_v3.md` (the WHY) and `DRISHTI_Build_Map.md` (the WHAT/WHEN, ticket-by-ticket) first if you haven't — this doc assumes you have. Everything below is keyed to Build Map ticket numbers.
+
+**If you are resuming specifically to check on training or continue Phase 5, jump to section 4 (training) or section 9 (Phase 5 guidance) first** — sections 1-3 are mostly stable background you've probably already internalized if you're mid-session.
 
 ---
 
 ## 1. Where the build actually stands
 
-**Phases 0–3 (Tickets #1–#30) are built, tested, and verified — locally AND on the actual GPU training machine, both confirmed clean.** Phase 4 onward (observability, negative obstacles, sparsity, temporal fusion, fovea, traversability, dashboard, eval harness — Tickets #33+) is **not started**.
+**Phases 0–4 (Tickets #1–#37) are built, tested, and verified — locally AND on the GPU training machine, both confirmed clean.** Phase 5 onward (sparsity/Claim 3, speed envelope/Claim 4, conservatism, motion/fovea, traversability, dashboard, eval harness — Tickets #38+) is **not started**.
 
 | Phase | Tickets | Status |
 |---|---|---|
-| 0 — Foundations, sensor model, the gate | #1–#9 | ✅ done (built in an earlier session, verified this session) |
-| 1 — The Clipmap | #10–#16 | ✅ done this session |
-| 2 — Cells, multi-layer, scatter | #17–#22 | ✅ done this session (#17 deliberately deferred, per Build Map's own allowance) |
-| 3 — Perception (range image → training) | #23–#30 | ✅ done this session |
-| 4 onward | #31–#68 | ❌ not started |
+| 0 — Foundations, sensor model, the gate | #1–#9 | ✅ done (earlier session) |
+| 1 — The Clipmap | #10–#16 | ✅ done |
+| 2 — Cells, multi-layer, scatter | #17–#22 | ✅ done (#17 deliberately deferred, per Build Map's own allowance) |
+| 3 — Perception (range image → training) | #23–#30 | ✅ done |
+| — Cache inference / semantic map checkpoint | #31–#32 | ❌ **not started** — blocked on #30, deliberately left for after a good trained checkpoint exists; see section 9 |
+| 4 — Observability & negative obstacles | #33–#37 | ✅ done **this session** |
+| 5 — Claims 3 & 4 (sparsity, speed envelope, conservatism) | #38–#43 | ❌ not started — **next up, see section 9** |
+| 6 onward | #44–#68 | ❌ not started |
 
-**Test counts — fully verified in both environments, at the end of this session, after fixing every cross-environment bug found (section 4):**
-- Local (this Windows laptop, Python 3.14.3, torch 2.11.0): **122 passed, 2 skipped**
-- Remote (the GPU server, Python 3.8.10, torch 2.0.1+cu117): **122 passed, 2 skipped** — identical, confirmed by actually running it there, not assumed.
+**Test counts, both environments, verified at the end of this session (not assumed — actually run on both machines):**
+- Full suite excluding the slow `test_train.py` (which needs real point-cloud fixtures and takes minutes): **149 passed, 2 skipped**
+- `test_train.py` alone: **5 passed** (includes the 2 new multi-sequence tests added this session)
+- **Total: 154 passed, 2 skipped**, identical shape on both the local Windows laptop (Python 3.14.3, torch 2.11.0) and the remote GPU server (Python 3.8.10, torch 2.0.1+cu117).
 
-The 2 skips in both places are the same pre-existing gap: `nuscenes-devkit` is not installed anywhere (not locally, not remotely) and no nuScenes-mini data has been downloaded. This does not block anything built so far — see section 5.
+The 2 skips are the same pre-existing gap as before: `nuscenes-devkit` is not installed anywhere and no nuScenes-mini data has been downloaded. Does not block anything built so far (RELLIS-3D is the primary dataset per Ticket #30's own spec, not a fallback).
 
 ---
 
-## 2. What was actually built this session, ticket by ticket
+## 2. What was built, ticket by ticket
 
 ### Phase 1 — The Clipmap (#10–#16)
-- `grid/addressing.py` — world↔index, toroidal wrap, scalar + vectorised (torch) variants.
-- `grid/cell.py` — fixed-point height encode/decode, observability flags, stamp tag, class_conf byte, NO_CEILING sentinel.
-- `grid/clipmap.py` — the `Clipmap` class: SoA allocation, scroll/clear-on-scroll, stamp validation, `lookup()`.
-- Tests: `tests/test_addressing.py`, `tests/test_nesting_exactness.py`, `tests/test_clipmap.py`.
+- `grid/addressing.py`, `grid/cell.py`, `grid/clipmap.py` (`Clipmap` class: SoA allocation, scroll/clear-on-scroll, stamp validation, `lookup()`).
+- Tests: `test_addressing.py`, `test_nesting_exactness.py`, `test_clipmap.py`.
 
 ### Phase 2 — Cells and the Overhang Claim (#18–#22)
-- `grid/scatter.py` — vectorised height scatter (`scatter()`) + class-mode scatter (`scatter_class()`).
-- `grid/histogram.py` — 8-bin per-cell height histogram, bin width derived from `vehicle_ugv.yaml`'s `min_clearance_m`.
-- `grid/layers.py` — ground/gap/ceiling extraction (`extract_layer_bins()`, `scatter_layers()`) — the machine-checked proof of **Claim 1**.
-- `eval/checkpoint_first_map.py` — Ticket #22's integration checkpoint (synthetic scene, since no real nuScenes data — see section 5).
-- Tests: `tests/test_scatter.py`, `tests/test_class_agg.py`, `tests/test_histogram.py`, `tests/test_layers.py`, `tests/test_checkpoint_first_map.py`.
+- `grid/scatter.py`, `grid/histogram.py`, `grid/layers.py` (ground/gap/ceiling extraction — Claim 1).
+- `eval/checkpoint_first_map.py` — synthetic-scene integration checkpoint.
+- Tests: `test_scatter.py`, `test_class_agg.py`, `test_histogram.py`, `test_layers.py`, `test_checkpoint_first_map.py`.
 
 ### Phase 3 — Perception (#23–#30)
-- `perception/range_image.py` — spherical projection + occlusion-depth channels (Tickets #23+#24, built together per the Build Map's own "same pass" requirement).
-- `perception/circular_pad.py` — horizontal-only circular padding utility (#25).
-- `perception/ground_prior.py` — column-wise incremental ground walk (#26) — labels, never strips.
-- `perception/input_tensor.py` — assembles the 9-channel network input tensor, saved normalisation stats (#27).
-- `perception/segnet.py` — **`FusionSegNet`**, extracted from the user-supplied `FusionSegNet_v5 (1).ipynb` and adapted (#28).
-- `perception/losses.py` — Lovász-Softmax + confidence-weighted CE + deep-supervision aux (#29).
-- `perception/train.py` — **the actual training script** (#30): `RellisSegDataset`, resumable checkpointing, AdamW + OneCycleLR + AMP, per-class IoU validation.
-- `perception/taxonomy.py` — added `RELLIS_ID_TO_NAME` (was missing — see section 4) and `rellis_label_ids_to_drishti()`.
-- `perception/rellis_loader.py` — added `load_rellis_labels()` (was missing — nothing previously read `.label` files at all).
-- Tests: `tests/test_range_image.py`, `tests/test_circular_pad.py`, `tests/test_ground_prior.py`, `tests/test_input_tensor.py`, `tests/test_segnet.py`, `tests/test_losses.py`, `tests/test_train.py`.
+- `perception/range_image.py`, `perception/circular_pad.py`, `perception/ground_prior.py`, `perception/input_tensor.py`.
+- `perception/segnet.py` — **`FusionSegNet`**, extracted from the user-supplied `FusionSegNet_v5 (1).ipynb`.
+- `perception/losses.py` — Lovász-Softmax + confidence-weighted CE + deep supervision.
+- `perception/train.py` — the training script. **Now supports multiple RELLIS-3D sequences at once** (added this session — see section 4).
+- `perception/taxonomy.py`, `perception/rellis_loader.py` — RELLIS ID→name mapping, label loading.
+- Tests: `test_range_image.py`, `test_circular_pad.py`, `test_ground_prior.py`, `test_input_tensor.py`, `test_segnet.py`, `test_losses.py`, `test_train.py`.
 
-### Also this session
-- `scripts/download_rellis.sh` — fixed a real extraction-path bug (see section 4).
-- `colab_download_rellis_os1.ipynb`, `colab_download_rellis_vel.ipynb` — standalone Colab notebooks for the two RELLIS streams (14GB Ouster, 5.58GB Velodyne). Not used in the end — the user downloaded the zips directly and we extracted locally instead.
-- `data/rellis/00004/` — the real, extracted RELLIS-3D sequence (see section 5). **Gitignored, not in git.**
+### Phase 4 — Observability and Negative Obstacles (#33–#37) — **built this session**
+- `observability/raycast.py` (#33) — 2D DDA (Amanatides-Woo) ray traversal. `dda_trace()` is the raw per-level primitive; `trace_beam()` does Ticket #33's mandated coarse-first-with-fine-ring-refinement (traces the WHOLE beam at the clipmap's coarsest level, plus a second pass at the finest level's own cell size for the portion of the beam within that level's sensor-Nyquist radius).
+- `observability/observe.py` (#34) — `carve_frame()`: combines every beam's trace for one frame into per-cell FREE/OCCUPIED/OCCLUDED evidence, with explicit precedence (OCCUPIED > FREE > OCCLUDED) so beams disagreeing about the same cell in one frame resolve deterministically regardless of iteration order. Free-space carving ("decaying occupancy") is just the direct overwrite — no separate counter needed. Added `Clipmap.mark_observability(level, gi, gj, obs_state)` to `grid/clipmap.py` as the write path (mirrors `lookup()`'s bounds-check, and — like `grid/scatter.py`'s writes — always refreshes `stamp` alongside `flags`, or Ticket #14's integrity check would treat the cell as corrupted on its next read).
+  - **A real bug caught and fixed during this ticket, worth knowing**: my first version only cast the occlusion "shadow" at the clipmap's coarsest level. `Clipmap.lookup()` always resolves a query through the **finest** level whose *window* (not Nyquist radius) contains that point — so for any occluded cell close to the vehicle, `lookup()` would check the (untouched) finest level first and report `UNOBSERVED`, never reaching the correctly-marked coarse level underneath. Fixed by re-tracing the shadow segment with the same `trace_beam()` coarse+fine tiering used for the main ray, not a bespoke coarsest-only pass. **Lesson for future tickets touching the clipmap**: any write path must match `lookup()`'s own level-selection logic, not just "write to whichever level seems logically right."
+- `observability/ground_plane.py` (#35) — `fit_local_ground_planes()` fits a LOCAL least-squares line (z = a·r_xy + b) per azimuth column, using only the last `k_recent` (default 5) CONFIRMED ground points from Ticket #26's walk — deliberately local, not a global fit, so it tracks a slope instead of averaging flat-then-sloped terrain into nonsense. `expected_ground_range(fit, ring, azimuth_col)` inverts the sensor's uniform-beam-spacing elevation model (same formula `perception/range_image.py`'s arcsin-fallback row assignment uses, inverted) to predict the FULL 3D range at which that ring's beam would intersect the local ground line.
+- `observability/negative_obstacle.py` (#36) — `detect_anomalous_cells()`: flags a cell when its range residual (measured − expected) is large **relative to its ring-neighbors in the same column**, never against an absolute threshold (an absolute version fires on every slope, since a slope's residual grows smoothly with ring index even with a *good* fit — see the `test_constant_8_degree_downslope_zero_false_positives` test, which the Build Map explicitly says to write first). Occluded cells (per Ticket #34's carving) are skipped outright, never scored. `PersistenceTracker` is a small, separate state machine requiring the SAME world cell (not the same ring/azimuth — those shift every frame as the vehicle moves) to be flagged on ≥3 CONSECUTIVE frames before promoting SUSPECT → NEGATIVE_OBSTACLE; a missed frame resets the streak.
+- `eval/checkpoint_trench.py` (#37) — the demo checkpoint: a synthetic ditch scene (physically exact per-ring/azimuth ground geometry, `r = h_m / sin(phi(ring))`, ditch = a window of (ring, azimuth) cells with the point simply omitted), run through the full #33-36 pipeline for 3 identical "consecutive" frames, producing a side-by-side PNG — a plain returns-only occupancy grid (ditch is invisible) next to DRISHTI's map (ditch flagged in red). Sent to the user this session; visually convincing (the plain grid's radial return pattern shows no gap-shaped anomaly at all, while DRISHTI's map shows a tight, precisely-located red cluster right at the ditch).
+- Tests: `test_raycast.py` (8), `test_observe.py` (7), `test_ground_plane.py` (5), `test_negative_obstacle.py` (8), `test_checkpoint_trench.py` (2) — 30 new tests, all passing, zero regressions in the existing 119.
 
 ---
 
 ## 3. The GPU — full detail on what it is and how to reach it
 
+*(Unchanged from the previous handoff — still accurate as of this session's end.)*
+
 ### What it is
 A college lab machine, reached over the college network (not the public internet — you must be on that network for SSH to reach it at all).
 
 - **Host:** `172.16.192.12` (private/internal IP)
-- **OS:** Ubuntu 20.04.6 LTS, hostname `ubuntu-Standard-PC-Q35-ICH9-2009`
-- **GPU:** NVIDIA GeForce RTX 2080 Ti, **11264 MiB (11 GB) VRAM**, driver 535.230.02, CUDA 12.2
-- **Was idle** the whole session (0% util, ~6 MiB used) — nobody else appeared to be using it, but it's shared lab hardware, so re-check before assuming it's free (command below).
-- **Python:** 3.8.10 (system python3) — noticeably older than this laptop's 3.14.3. Caused two real bugs this session (section 4, items 12 and 14) — treat "works locally" as unproven for anything torch/ast-version-sensitive until it's actually run there.
-- **PyTorch:** 2.0.1+cu117, **CUDA confirmed working** (`torch.cuda.is_available()` → `True`).
-- **torchvision:** 0.15.2+cu117 — already present, did not need installing.
-- **Disk:** `/` has 393GB total, ~92GB free at last check.
-- **Username:** `utkarsh`
-- **Home dir:** `/home/utkarsh`
+- **OS:** Ubuntu 20.04.6 LTS
+- **GPU:** NVIDIA GeForce RTX 2080 Ti, 11264 MiB (11 GB) VRAM, driver 535.230.02, CUDA 12.2
+- **Python:** 3.8.10. **PyTorch:** 2.0.1+cu117, CUDA confirmed working.
+- **Username:** `utkarsh`, home `/home/utkarsh`
+- **Disk:** `/` has 393GB total — **check free space before any big transfer**, it has gotten tight this session (down to ~52-57GB free after adding the 4 extra RELLIS sequences; still comfortable, but don't assume the old "92GB free" figure from the last handoff).
 
-### How to actually connect — the important part
+### How to connect
 
-**Password auth is set up but you should never need it again.** SSH key-based auth is already configured and working. Do not ask the user for the password — it isn't needed, and this project's own policy is that Claude must never type a password into anything anyway. If key auth somehow stops working, that's a problem to raise with the user, not solve by asking for the password again.
+**Password auth exists but you should never need it. Never ask the user for the password, never type one.** SSH key-based auth is fully configured.
 
-**The key:**
-- Private key: `C:\Users\bhavy\.ssh\id_ed25519_drishti_gpu` (on this Windows laptop)
-- Public key: already appended to `~/.ssh/authorized_keys` on the remote server.
-- **Never touch `C:\Users\bhavy\.ssh\id_ed25519` (no suffix)** — that's the user's own pre-existing key for something else (likely GitHub), unrelated to this project. The `_drishti_gpu` suffix is what makes it ours.
-
-**The exact connect command** (works from Bash/Git Bash; same idea in PowerShell with backslash paths):
+- Private key: `C:\Users\bhavy\.ssh\id_ed25519_drishti_gpu`
+- **Never touch `C:\Users\bhavy\.ssh\id_ed25519` (no suffix)** — the user's own unrelated key.
 
 ```bash
 ssh -i "$HOME/.ssh/id_ed25519_drishti_gpu" -o BatchMode=yes utkarsh@172.16.192.12 "COMMAND_HERE"
 ```
 
-`-o BatchMode=yes` makes it fail fast instead of hanging if key auth somehow breaks, rather than silently sitting at a password prompt forever.
+`-o BatchMode=yes` fails fast instead of hanging if key auth somehow breaks.
 
-**File transfer** (same key, standard `scp`):
+**File transfer — IMPORTANT LESSON FROM THIS SESSION, read before transferring anything bulky:**
+
+`scp -r` on a directory with thousands of small files (e.g. `data/rellis/<seq>/os1_cloud_node_kitti_bin/*.bin`) is **extremely slow** — each file pays its own protocol round-trip, observed at roughly 30 files/minute, which would have taken ~5+ hours for ~11,500 remaining point-cloud files. Two fixes, in order of preference:
+1. **Best**: if the data exists locally as a compressed archive already (e.g. the original RELLIS `.zip` downloads), `scp` the archive itself (one big file, no per-file overhead) and `unzip` specific paths on the REMOTE side. This is what actually worked — cut a ~5+ hour transfer down to ~1.5 hours for 14.2GB of zips vs. ~29GB of raw extracted files.
+2. If no archive exists, `tar cf - <dirs> | ssh ... "cat > remote.tar"` (streamed, single connection) beats `scp -r`, though it's still bandwidth-bound on the raw (uncompressed) byte count.
+
+**Also**: a `nohup ... & disown` launched over SSH without `< /dev/null` on stdin can leave the SSH session itself hanging open (observed: `LAUNCHED PID` prints, but the wrapper shell process never exits) even though the actual background process is correctly detached and running fine. Always include `< /dev/null` in the launch command:
 
 ```bash
-scp -i "$HOME/.ssh/id_ed25519_drishti_gpu" <local_path> utkarsh@172.16.192.12:<remote_path>
+ssh ... "cd ~/drishti && nohup python3 -u -m perception.train ... > checkpoints/train.log 2>&1 < /dev/null & disown; sleep 2; ps aux | grep perception.train"
 ```
 
-**No `rsync` is available** on this laptop's Git Bash — use `scp` or `tar` + `scp` for bulk transfers (see section 6).
-
-### What's on the remote server right now
-
-- **`~/drishti/`** — the full project repo, as a **plain file copy** (NOT a git clone — `git status` there fails with "not a git repository"). Transferred via `tar` + `scp`, not `git clone`. **Confirmed fully in sync with local as of the end of this session** (122/122 passed, identical) — but nothing auto-syncs. If you make more local changes, `scp` them over manually and re-run the remote test suite before trusting anything.
-- **`~/drishti/data/rellis/00004/`** — the real RELLIS-3D sequence, 2059 frames, points + labels + poses, identical to the local copy (see section 5).
-- **`~/drishti_transfer.tar.gz`** — the original transfer archive. Safe to delete once you've confirmed `~/drishti/` is current; just disk space otherwise.
-- **No `~/drishti/checkpoints/` yet** — training has not actually been run for real. Only tiny CPU smoke tests (a handful of fake frames, 1-2 epochs, both locally and on the remote) have run, to verify the training loop's mechanics work. **The real multi-epoch GPU training run has not happened yet** — that's the very next thing to do.
-- pip packages installed with `--user` on top of whatever was already there: `pytest`, `hypothesis`, `pyyaml`, `matplotlib`.
+If you forget it and a launch hangs, it's safe to just kill the stray wrapper-shell PID directly (`ps aux` on remote will show it as a `bash -c ...` process using ~0% CPU, separate from the real training PIDs which will be burning real CPU/GPU) — the training itself is unaffected.
 
 ### Quick health check (run this first, every time you resume)
 
 ```bash
-ssh -i "$HOME/.ssh/id_ed25519_drishti_gpu" -o BatchMode=yes utkarsh@172.16.192.12 "nvidia-smi --query-gpu=name,memory.total,memory.used,utilization.gpu --format=csv"
+ssh -i "$HOME/.ssh/id_ed25519_drishti_gpu" -o BatchMode=yes utkarsh@172.16.192.12 "nvidia-smi --query-gpu=name,memory.total,memory.used,utilization.gpu --format=csv; ps aux | grep perception.train | grep -v grep"
 ```
 
-If that hangs or fails, the college network path is probably down (you're not on it), not a problem with the key.
+If SSH hangs or fails, the college network path is probably down (you're not on it), not a problem with the key.
 
 ---
 
-## 4. Bugs found and fixed this session — worth knowing before you trust anything
+## 4. Training — full history, what's running right now, and how to check it
 
-These were all caught by actually testing against real data/real environments, not assumed. A fresh session should know the *reasoning*, not just that a fix exists — several of these reveal real gaps in the Build Map / Bible / source notebook themselves.
+This is almost certainly the most time-sensitive section — read it fresh, don't trust a summary from memory.
 
-1. **Bible Part 8's own worked example has an arithmetic error.** States `si=16, sj=328, flat=167952` for a specific query point; independently verified the correct values are `si=272, sj=360, flat=184592`. My code matches the correct math; the document doesn't. Worth fixing in the Bible text before it's in front of a judge.
-2. **Ticket #14's literal stamp formula is a no-op at N=512.** `(i&0xFF)<<8 | (j&0xFF)` uses bits already fully determined by the storage index at this array size (256 divides 512), so it can never detect a missed clear. Fixed by tagging bits *above* the storage index instead. See `grid/cell.py::expected_stamp`'s docstring.
-3. **Ticket #21's described ceiling-detection algorithm (gate on a sufficient gap length) would misclassify a close overhang as "no ceiling" (infinite clearance) instead of reporting its real, insufficient clearance** — verified against all four of the Build Map's own test cases before fixing. See `grid/layers.py::extract_layer_bins`'s docstring.
-4. **RELLIS-3D ships no `ring` field** (unlike what Ticket #23 assumed "both datasets have it") — `perception/range_image.py` has an arcsin-based elevation fallback for when `ring < 0`.
-5. **PyTorch's circular padding needs the full pad tuple matching tensor rank**, not just `(left, right)`, for 4D+ input. Fixed in `perception/circular_pad.py`.
-6. **The source notebook (`FusionSegNet_v5 (1).ipynb`) contradicts itself**: docstring says `weights=None` (from scratch), code actually loads `EfficientNet_B0_Weights.DEFAULT` (ImageNet pretrained). Extraction follows the documented intent (from scratch), not the notebook's actual code — see `perception/segnet.py`'s docstring.
-7. **The unmodified notebook architecture crashes on this project's own input shape** `(1,9,32,1080)` — 5 stride-2 downsamples floor an odd intermediate width, so the decoder's upsampling lands one pixel narrower than its skip connection. Fixed with `_match_size()` in `perception/segnet.py`.
-8. **Ticket #28's stated parameter count ("~4-4.5M") is actually Bible Part 5.3's *encoder-only* figure**, not the whole network's. The whole network measures 5.82M, correctly matching Bible Part 5.1's separate "~8M, competitive band 6-7M" framing. Don't be alarmed if a future check sees ~5.8M and worries it's wrong against Ticket #28's text — it isn't.
-9. **`OneCycleLR` cannot be resumed with a *different* target epoch count than originally planned** — its schedule is tied to a fixed total-step count baked in at construction, and `load_state_dict` restores that total. `perception/train.py`'s resumability is designed around "same target, resume after a crash," not "extend the plan mid-run."
-10. **Training with `batch_size=1` crashes** — ASPP's global-average-pool branch collapses spatial size to 1x1, and BatchNorm2d can't compute training-mode statistics from a single value per channel. `perception/train.py` now raises a clear error instead of letting this surface as a cryptic PyTorch exception. **Always use `batch_size >= 2` for training** (eval/inference with batch_size=1 is fine).
-11. **`perception/taxonomy.py` had a RELLIS name→DrishtiClass map but NO numeric-ID→name map at all** — meaning nothing could actually decode a real `.label` file before this session. Added `RELLIS_ID_TO_NAME`, cross-checked against real downloaded data (the exact ID set observed in 20 real frames — `{0,3,4,8,17,19,27,33,34}` — matches the published ontology precisely).
-12. **`ast.unparse` doesn't exist before Python 3.9** — broke a structural test on the GPU server's Python 3.8. Fixed to use line-range removal via `lineno`/`end_lineno` instead (available since 3.8).
-13. **`scripts/download_rellis.sh` assumed archive-internal paths start with `00004/`** — the real archives are all prefixed `Rellis-3D/00004/...`. Confirmed against the actual downloaded zips and fixed.
-14. **`torch.amp.GradScaler` (the modern, non-deprecated device-agnostic API) doesn't exist in torch 2.0.1** — the version actually installed on the GPU training machine. Fixing the deprecation warning locally (newer torch) broke real training on the remote (older torch) entirely — it would have crashed on the very first call. Fixed with a try/except fallback to `torch.cuda.amp.GradScaler` in `perception/train.py`. **This is exactly the kind of bug that only shows up by actually running on the target machine** — worth remembering before "fixing" any other deprecation warning without re-testing remotely.
+### 4a. Run #1 — single sequence (00004 only) — **COMPLETE**
+
+- Launched via `python3 -u -m perception.train --sequence-dir data/rellis/00004 --sensor-config configs/sensor_ouster_os1_64.yaml --out-dir checkpoints --epochs 20 --batch-size 4 --device cuda`, results in `~/drishti/checkpoints/` on the remote (pulled locally into `checkpoints_remote/` too — `checkpoint.pt`, all `val_metrics_epoch*.json`, `train.log`, `channel_stats.json`).
+- **1750 training frames, 309 held out** (last 15% by index, contiguous, per Ticket #30's own no-shuffle spec).
+- Ran to completion, ~57 minutes wall-clock (~2.4-2.9 min/epoch).
+- **Final result (epoch 19/19): val mIoU = 0.3220.** Per-class: class 0 (0.89), class 5/vegetation (0.91), class 7 (0.66) learned well; class 1 (0.01) and class 2 (0.10) weak; classes 3, 4, 6 stuck at 0.0; classes 8/9 (`NEGATIVE_OBSTACLE`/`OVERHANG`) at `n/a` — **this is correct and expected, not a bug**: those two DRISHTI classes are deliberately geometry-derived only (Phase 4's own job, now built), and NO dataset's semantic labels are allowed to map onto them (`perception/taxonomy.py`'s own docstring/`NO_SEMANTIC_MAP_CLASSES`) — so they can never show a training IoU regardless of how much data you add.
+- Plateaued around epoch 5-6, didn't improve much after — **the reason turned out to be data scarcity/diversity** (one short sequence, 2 classes entirely absent, most others thin), which motivated Run #2.
+- **A real bug hit mid-run and fixed**: `tail -f` on `train.log` showed no live output for a while even though training was genuinely progressing — Python's stdout is BLOCK-buffered (not line-buffered) when redirected to a file rather than an interactive terminal. Fixed by killing and relaunching with `python3 -u` (unbuffered). **Always launch training with `-u`.**
+
+### 4b. Dataset expansion — all 5 RELLIS-3D sequences now available
+
+The user had downloaded 3 zip archives covering **all 5 sequences** (00000-00004), not just 00004 as originally used:
+- `Rellis_3D_os1_cloud_node_kitti_bin.zip` (14.3GB, point clouds, all 5 sequences)
+- `Rellis_3D_os1_cloud_node_semantickitti_label_id_20210614.zip` (182MB, labels)
+- `Rellis_3D_lidar_poses_20210614.zip` (609KB, poses+calib)
+
+Extracted and **verified byte/frame-count-exact** on both machines:
+
+| Sequence | Frames (bin=label=poses, verified) |
+|---|---|
+| 00000 | 2847 |
+| 00001 | 2319 |
+| 00002 | 4147 |
+| 00003 | 2184 |
+| 00004 | 2059 |
+| **Total** | **13,556** |
+
+Local: `data/rellis/<seq>/`. Remote: `~/drishti/data/rellis/<seq>/`. **Gitignored on both, never committed** (same as before). Local disk usage: 00000=7.0G, 00001=5.7G, 00002=11G, 00003=5.4G, 00004=5.1G (~34.2GB total).
+
+**A messy bug during this extraction, worth knowing if you see partial data**: an early attempt to `scp -r` the raw extracted sequences directly (before switching to the zip-transfer approach above) was killed partway through. A LATER fresh zip-extraction pass for sequence 00000 collided with a stale partial copy already sitting in `~/drishti/data/rellis/00000/` from that earlier attempt, causing an `mv: Directory not empty` error. Fixed by deleting the stale partial directory and moving in the freshly-unzipped complete one, then re-verifying counts. **The general lesson**: after any interrupted transfer, don't trust that a sequence directory's mere *existence* means it's complete — check `find <dir> -name '*.bin' | wc -l` against the known-correct counts in the table above before training on it.
+
+### 4c. `perception/train.py` — now supports multiple sequences
+
+Changed this session (all changes tested — see `test_build_multi_sequence_splits_keeps_val_within_each_sequence_tail` and `test_training_smoke_run_across_multiple_sequences` in `tests/test_train.py`):
+
+- `train()`'s `sequence_dir` parameter now accepts either a single path (old behavior, unchanged) OR a list of paths.
+- New `build_multi_sequence_splits(sequence_dirs)` — splits EACH sequence independently (last 15% by index, per sequence — never a global shuffle across sequences, for the same "don't leak adjacent frames" reason Ticket #30 already cared about within one sequence), then concatenates the train/val item lists. Each item is `(sequence_dir, frame_idx)`, not just `frame_idx`.
+- `RellisSegDataset` now takes an `items: list[(sequence_dir, frame_idx)]` instead of `(sequence_dir, frame_indices)`.
+- CLI: `--sequence-dir` now takes `nargs="+"` — pass multiple paths space-separated.
+- This is a **backward-compatible, additive change** — nothing about single-sequence training changed.
+
+### 4d. Run #2 — all 5 sequences at once — **IN PROGRESS, check status before assuming anything**
+
+Launched into a **fresh** `~/drishti/checkpoints_multi/` directory (deliberately NOT reusing `checkpoints/`, which holds Run #1's completed 20-epoch results — reusing it would make the resume logic see "epoch 20 already done" and skip training entirely):
+
+```bash
+ssh -i "$HOME/.ssh/id_ed25519_drishti_gpu" -o BatchMode=yes utkarsh@172.16.192.12 \
+  "cd ~/drishti && nohup python3 -u -m perception.train \
+    --sequence-dir data/rellis/00000 data/rellis/00001 data/rellis/00002 data/rellis/00003 data/rellis/00004 \
+    --sensor-config configs/sensor_ouster_os1_64.yaml --out-dir checkpoints_multi \
+    --epochs 20 --batch-size 4 --device cuda \
+    > checkpoints_multi/train.log 2>&1 < /dev/null & disown"
+```
+
+- **11,522 training frames, 2,034 held out** (across all 5 sequences).
+- **Per-class pixel counts improved immediately** vs. Run #1 — classes 1, 2, 3, 4, 6 now all have thousands of sample pixels (previously near-zero with just sequence 00004), confirming the hypothesis that Run #1's plateau was a data-diversity problem. Only classes 8/9 stay at zero pixels — expected, see 4a above, this is permanent by design, not a dataset gap.
+- **~1170-1200s (~19.5-20 min) per epoch** (6.6x more data than Run #1, so proportionally slower) — full 20 epochs is roughly **~6.5 hours** wall-clock from launch.
+- **Last confirmed status (check freshly, don't trust this number)**: epoch 1/19 complete, val mIoU = **0.3621** — already exceeding Run #1's FINAL (epoch 19) result of 0.3220, after just 2 epochs. Class 0 jumped to 0.665 IoU, class 1 to 0.690 IoU (both were ~0 in Run #1) — strong early confirmation more data is helping exactly where predicted.
+
+**Check current status:**
+```bash
+ssh -i "$HOME/.ssh/id_ed25519_drishti_gpu" -o BatchMode=yes utkarsh@172.16.192.12 \
+  "tail -20 ~/drishti/checkpoints_multi/train.log; echo ---; ps aux | grep perception.train | grep -v grep"
+```
+If `ps aux` shows no `perception.train` processes, it finished (or died) — check the log's last lines for either a clean "Epoch 19" completion or a Python traceback.
+
+**Pull results down locally** (mirrors Run #1's pattern, into a NEW folder so it doesn't clobber Run #1's pulled results in `checkpoints_remote/`):
+```bash
+mkdir -p checkpoints_multi_remote
+scp -i ~/.ssh/id_ed25519_drishti_gpu utkarsh@172.16.192.12:~/drishti/checkpoints_multi/checkpoint.pt checkpoints_multi_remote/
+scp -i ~/.ssh/id_ed25519_drishti_gpu utkarsh@172.16.192.12:"~/drishti/checkpoints_multi/val_metrics_epoch*.json" checkpoints_multi_remote/
+scp -i ~/.ssh/id_ed25519_drishti_gpu utkarsh@172.16.192.12:~/drishti/checkpoints_multi/train.log checkpoints_multi_remote/
+```
+
+Or use `scripts/sync_training_results.ps1` (PowerShell, polls every 20s by default) — **it currently defaults to the OLD `checkpoints` remote dir**, so run it with `-RemoteDir "~/drishti/checkpoints_multi"` to watch Run #2 instead:
+```powershell
+.\scripts\sync_training_results.ps1 -RemoteDir "~/drishti/checkpoints_multi" -LocalDir "checkpoints_multi_remote"
+```
+
+**You do NOT need to keep the laptop on for training to continue** — it's fully detached on the remote server via `nohup`/`disown`. The laptop is only needed to watch/pull results.
 
 ---
 
-## 5. Datasets — what you actually have
+## 5. Bugs found and fixed — worth knowing before you trust anything
+
+*(Items 1-14 are from the first session and unchanged — kept here for completeness. New items start at 15.)*
+
+1. Bible Part 8's own worked example has an arithmetic error (`si=16,sj=328,flat=167952` stated vs. correct `si=272,sj=360,flat=184592`).
+2. Ticket #14's literal stamp formula is a no-op at N=512 — fixed by tagging bits above the storage index (`grid/cell.py::expected_stamp`).
+3. Ticket #21's described ceiling-detection gap-length gate would misclassify a close overhang — removed the gate (`grid/layers.py::extract_layer_bins`).
+4. RELLIS-3D ships no `ring` field — `perception/range_image.py` has an arcsin fallback.
+5. PyTorch circular padding needs the full pad tuple for 4D+ tensors (`perception/circular_pad.py`).
+6. Source notebook self-contradicts on `weights=None` vs. actually loading pretrained — extraction follows the documented intent.
+7. Notebook architecture crashes on `(1,9,32,1080)` — fixed with `_match_size()` in `perception/segnet.py`.
+8. Ticket #28's "~4-4.5M" params is the Bible's encoder-only figure, not the whole network's (whole network = 5.82M, matches the Bible's separate 6-8M framing).
+9. `OneCycleLR` can't resume with a different target epoch count than originally planned.
+10. `batch_size=1` crashes (ASPP global-pool + BatchNorm) — explicit guard added, **always use `batch_size >= 2`**.
+11. `perception/taxonomy.py` had no RELLIS numeric-ID→name map — added `RELLIS_ID_TO_NAME`, cross-validated against real data.
+12. `ast.unparse` doesn't exist before Python 3.9 — fixed via line-range removal for the remote's Python 3.8.
+13. `scripts/download_rellis.sh` assumed the wrong archive-internal path prefix.
+14. `torch.amp.GradScaler` doesn't exist in torch 2.0.1 (the remote's version) — fixed with a try/except fallback to `torch.cuda.amp.GradScaler`.
+15. **Stdout is block-buffered, not line-buffered, when redirected to a file** — `tail -f train.log` can sit blank for a long time even as training genuinely progresses. Always launch with `python3 -u`.
+16. **`scp -r` on thousands of small files is ruinously slow** (~30 files/min observed) — transfer a compressed archive instead and extract remotely, or use `tar | ssh cat >`. See section 3.
+17. **`nohup ... & disown` over SSH without `< /dev/null` can leave the SSH session's own wrapper shell hanging** even though the real background process detaches and runs fine. Always redirect stdin too.
+18. **An interrupted transfer can leave a partially-populated directory that looks superficially fine** (has the right subdirectory names) but is missing most of its files — always verify file COUNTS against a known-correct source before trusting a synced dataset directory, not just that the directory exists.
+19. **`Clipmap.lookup()` resolves by which level's WINDOW contains a point, not by sensor-Nyquist radius** — any new write path into the clipmap (like Ticket #34's observability carving) must mirror that exact level-selection logic, or writes to a "logically coarse" level can become invisible to `lookup()` for points that are geometrically close to the vehicle. See section 2's Phase 4 notes for the concrete bug this caused and how it was fixed.
+
+---
+
+## 6. Datasets — current status
 
 | Dataset | Status | Where |
 |---|---|---|
-| **RELLIS-3D, sequence 00004, Ouster OS1-64 stream** | ✅ Fully downloaded, extracted, verified against real data (points/labels/poses counts all match: 2059/2059/2059) | Local: `data/rellis/00004/`. Remote: `~/drishti/data/rellis/00004/`. **Gitignored on both — never committed.** |
+| **RELLIS-3D, all 5 sequences (00000-00004), Ouster OS1-64** | ✅ Fully downloaded, extracted, verified frame-count-exact on both machines (13,556 frames total) | Local: `data/rellis/<seq>/`. Remote: `~/drishti/data/rellis/<seq>/`. **Gitignored on both.** |
 | **RELLIS-3D, Velodyne stream** | ❌ Not downloaded (optional per Build Map) | — |
-| **nuScenes-mini** | ❌ Not downloaded. `nuscenes-devkit` not installed anywhere. | — |
+| **nuScenes-mini** | ❌ Not downloaded, `nuscenes-devkit` not installed | — |
 
-**Important framing from earlier in this session, worth restating:** RELLIS-3D is actually *preferred* for training per Ticket #30's own spec ("Train on RELLIS-3D sequence 00004 if #3 landed; otherwise nuScenes-mini") — nuScenes is the fallback, not the primary. Skipping nuScenes costs you the Ticket #59 portability ablation's strongest form (two genuinely different real sensors) and one specific demonstrated finding about nuScenes' 32-beam resolution — but it does not block training or anything built so far.
-
-The three source RELLIS zip files (14GB Ouster cloud, 174MB labels, 174MB poses) are sitting in the repo root locally (`Rellis_3D_*.zip`) — gitignored, safe to delete now that `data/rellis/00004/` has what's needed, purely a disk-space question.
+The three source RELLIS zips are still sitting in the repo root locally (`Rellis_3D_*.zip`, gitignored) — safe to delete now that all 5 sequences are extracted, purely a disk-space question (they've already been deleted from the remote's `/tmp` after extraction there).
 
 ---
 
-## 6. How the GPU transfer was actually done (for reference, if you need to re-sync)
+## 7. File transfer reference (updated)
 
-No `rsync` available locally, so: `tar -czf` (excluding `.git`, caches, the source zips, `eval/out/`) → `scp` the ~2GB archive → `ssh ... tar -xzf` on the remote. This is a one-way, manual push — nothing watches for changes.
-
-**A real gotcha from this session, worth internalising:** the big archive transfer was kicked off early, then MORE files kept getting built locally afterward (Tickets #27-30 and several bugfixes) without re-syncing — so the remote silently fell behind for a while, and a "run the tests on the remote" check would have been misleadingly reassuring (it ran, and passed, but only because it was running a smaller, stale set of tests that didn't include the new files at all). **Always check file counts/timestamps match, not just "pytest passed," when trusting a remote copy is current.** For a handful of changed files, direct `scp` is simpler than rebuilding the whole archive:
-
+Local → remote sync of CODE changes (small number of files) — direct `scp`, simplest:
 ```bash
 scp -i "$HOME/.ssh/id_ed25519_drishti_gpu" <changed files> utkarsh@172.16.192.12:~/drishti/<matching path>/
 ```
 
-**Always re-run the full test suite on the remote after syncing**, before trusting anything:
-
+**Always re-run the full test suite on the remote after syncing code**, before trusting anything:
 ```bash
 ssh -i "$HOME/.ssh/id_ed25519_drishti_gpu" -o BatchMode=yes utkarsh@172.16.192.12 "cd ~/drishti && python3 -m pytest -q 2>&1 | tail -30"
 ```
 
+For BULK data (many files or large files) — see section 3's transfer lesson (zip-then-remote-unzip beats `scp -r` on many small files; `tar | ssh cat >` beats `scp -r` even for fewer, larger files).
+
 ---
 
-## 7. The actual next step
+## 8. Repository structure note
 
-**Nothing has been trained yet.** Everything above is infrastructure and verified-correct code, confirmed working end-to-end on the actual training machine. The next action is:
+`observability/`, `planning/`, `temporal/`, `attention/`, `viz/` currently exist as package directories (created in an earlier session's commit) but **only `observability/` has real code in it now** (Phase 4, this session) — the other four are still empty `__init__.py` stubs. Don't be misled by their existing directory presence into thinking Phases 5+ are further along than they are; check actual file contents, not directory listings.
 
-1. Run a **short 1-epoch validation run on real GPU hardware** first (not yet done) — to measure real per-epoch timing (unknown — CPU smoke tests don't tell you this) and sanity-check loss/IoU output before committing to a longer run.
-2. Based on that timing, decide a realistic epoch count (Build Map suggests ~15-20 epochs as a reasonable target, per Ticket #30, but this should follow from measured timing, not be assumed).
-3. Launch the real run, e.g.:
+---
 
-```bash
-ssh -i "$HOME/.ssh/id_ed25519_drishti_gpu" -o BatchMode=yes utkarsh@172.16.192.12 \
-  "cd ~/drishti && python3 -m perception.train --sequence-dir data/rellis/00004 --sensor-config configs/sensor_ouster_os1_64.yaml --out-dir checkpoints --epochs 1 --batch-size 4 --device cuda"
-```
+## 9. Next step — Phase 5 (Tickets #38-43), concrete guidance
 
-(Run this as a background task and monitor — it's a genuinely long-running job. `perception/train.py` has no `if __name__` guard issue running as `-m`, confirmed by the smoke tests calling `train()` directly, but the actual `python3 -m perception.train ...` CLI invocation itself has not been separately smoke-tested — worth a quick dry check, e.g. `--epochs 1` on a tiny manually-copied subset first, if being extra cautious.)
+This is genuinely the most useful section for a fresh session to read carefully — it's not generic advice, it's what's actually needed to implement these 6 tickets correctly on the FIRST attempt, based on patterns that mattered in Phase 4.
 
-4. **Before burning real GPU hours**, note `perception/train.py` prints a per-class pixel-count sanity check up front, with an explicit warning if any class has zero training pixels. In the tiny fake-data smoke tests this session, most classes showed zero pixels (expected — the fake data only used 3 label IDs). On the REAL 2059-frame sequence this has not been checked yet — do this first, on the real data, before assuming a full run is worthwhile as configured.
-5. Report results with **per-class IoU, not just mean** (Ticket #30's own requirement), and state the training-set size explicitly — both already built into `perception/train.py`'s output and its saved `val_metrics_epoch*.json` files.
+**Phase 5's own framing (Build Map): this is where Claims 3 and 4 — the project's two quantitative, falsifiable claims — get demonstrated with running code, not just described.** Treat this phase as higher-stakes than Phase 4: these numbers are meant to be defended in front of a judge.
 
-One open config question worth deciding, not yet resolved: `configs/sensor_ouster_os1_64.yaml`'s `d_theta_rad`/`d_phi_rad` are flagged elsewhere in this codebase as **not yet measured against real data** (Ticket #6's "the gate" was only ever run against synthetic grids and against the HDL-32E/HDL-64E configs, never against a real Ouster OS1-64 sweep). Training will run fine regardless (the network doesn't care what these values are), but any downstream claim about this specific sensor's derived hazard ranges would rest on an unverified config until that gate is actually run against `data/rellis/00004`.
+### #38 — Expected returns, kappa, r_blind → `observability/sparsity.py`
+- Formulas: $N_{exp}(r) = t_{min} \cdot w_{min} / (r^2 \cdot \Delta\phi \cdot \Delta\theta)$, $\kappa = N_{obs}/N_{exp}$, $r_{blind} = \sqrt{t_{min} w_{min} / (\Delta\phi \Delta\theta)}$.
+- **`vehicle_ugv.yaml` already has the needed constants**, checked this session: `min_object_t_m: 1.00` (t_min), `min_object_w_m: 0.10` (w_min). `sensor/sensor_model.py`'s `SensorConfig` already has `d_theta_rad`/`d_phi_rad`. **Load these from config, never hardcode** — `tests/test_vehicle_config.py` already greps the repo for these literals outside `vehicle_ugv.yaml` and fails if found, so hardcoding will be caught immediately, but don't rely on the test to catch what good practice should prevent.
+- **Exact acceptance numbers to hit** (from the Bible's own table, so these are hand-verifiable, not just self-consistent): HDL-64E pedestrian $r_{blind}$ = 194.8m, pole = 163.7m, fence post = 66.8m; HDL-32E pedestrian = 79.2m, fence post = 27.2m. Configs for both sensors already exist (`configs/sensor_hdl64e.yaml`, presumably `sensor_hdl32e.yaml` too — confirmed used in `tests/test_train.py`). Assert $N_{exp} \propto 1/r^2$, not $1/r$ — an easy accidental bug.
+
+### #39 — Structure test and sparsity flags → `observability/sparsity.py` (same file)
+- **The single most important trap in this whole phase, called out explicitly in the Build Map**: the decision table's last row is `N_obs=0, N_exp<1 → UNKNOWN, never FREE`. The Build Map itself predicts a model will "simplify" this to "no returns → free" because that's what every conventional occupancy grid does — **this row IS Claim 3, the entire point of the ticket**. Do not let it collapse.
+- `N_obs == 1` must default to `SPARSE_STRUCTURED`, never "structured vs noise" — a single point can never be proven unstructured, so the cautious verdict applies.
+- Structured = returns tightly clustered in range AND contiguous in ring index — this needs the SAME "neighbors in the same column" thinking Ticket #36 (Phase 4) already used for its ring-to-ring discriminator; that code (`observability/negative_obstacle.py::detect_anomalous_cells`) is a reasonable model for how to compare a cell against its ring-neighbors cleanly.
+- **Test to write first, matching the ticket's own naming**: `test_unknown_past_r_blind` — a cell at 90m on nuScenes-config (past the 27.2m fence-post $r_{blind}$) with zero returns must assert `UNKNOWN`; a cell at 15m with zero returns must assert `FREE`.
+
+### #40 — Speed envelope, Claim 4 → `planning/speed_envelope.py`
+- Formula: $v_{max}(R) = -a \cdot t_r + \sqrt{a^2 t_r^2 + 2aR}$, using `braking_a_ms2` and `t_react_s` — **both already in `vehicle_ugv.yaml`** (checked this session: `a=4.0`, `t_react=0.30`, with a code comment already flagging `t_react_s` as a placeholder until Ticket #55 measures real P95 latency — leave that TODO in place, don't try to "fix" it prematurely).
+- **Exact acceptance numbers**: `v_max(21.6) = 12.00 m/s = 43.2 km/h`, `v_max(6.7) = 6.24 m/s = 22.5 km/h` (KITTI); `v_max(12.6) = 8.99 m/s = 32.0 km/h` (nuScenes).
+- Assert monotonicity (shorter range never yields higher speed) and that lowering `a` lowers `v_max` — cheap, high-value sanity tests.
+- **This is advisory output only — do not let it gate/control anything**, per the ticket's own explicit warning. Report which hazard is binding (the minimum over the active hazard set), not just the final number.
+
+### #41 — Conservatism, the caution order → `planning/conservatism.py`
+- Cost order: `FREE ≤ known-rough ≤ UNKNOWN_COST < LETHAL`, with `UNKNOWN_COST` **strictly** below `LETHAL` and finite.
+- **The trap here, explicitly named in the Build Map**: setting `UNKNOWN_COST = LETHAL` "to be safe" technically satisfies monotonicity but paralyzes the vehicle (it would refuse to move near anything unknown, which is useless, not safe). Monotonicity is necessary but not sufficient — don't let a model (or yourself) take the "obviously safe" shortcut here.
+- Enumerate the Bible Part 16's fourteen information-deficit paths as an explicit table in code (flag-combination → cost floor) — this needs reading Part 16 of the Bible directly, not guessing at 14 plausible-sounding cases.
+- This ticket is blocked by #34 (observability flags — already built, Phase 4) and #39 (sparsity flags, above) — build in that order.
+
+### #42 — The monotonicity property test → `tests/test_conservatism.py`, using Hypothesis
+- `hypothesis` is **already pip-installed on both machines** (confirmed working from the first session).
+- Structure per the Build Map: a `degradations()` strategy that only ever makes things WORSE (drop points, lower kappa, mark occluded, mark provisional, push past r_blind, age the data) applied to a random cell state, asserting `cost(degraded, VEHICLE) >= cost(cell, VEHICLE)` always holds, called through the PUBLIC `cost()` function only (any fast path that bypasses it is unsupported by construction).
+- **Two watch-outs explicitly named**: (1) `degradations()` must be checked to actually be a strict information loss — a generated "degradation" that accidentally adds information makes the whole property test vacuous and worthless. (2) **A property test you have never seen fail is not evidence** — the ticket explicitly wants you to deliberately introduce a bug (e.g. make `UNOBSERVED` cost zero) and confirm the test *fails* as expected, before trusting that it passing on the real code means anything. Don't skip this — it's cheap and it's the whole point of writing a property test in the first place.
+- Target: 10,000 examples, zero violations on the real code; the deliberately-broken version must fail.
+
+### #43 — Checkpoint: claims 3 and 4 demonstrable
+- Same pattern as Ticket #37's `eval/checkpoint_trench.py` this session: a synthetic (or real, if a good checkpoint from #31/#32 exists by then) frame with `SPARSE_STRUCTURED` cells overlaid and the speed envelope polygon drawn, plus printing the #42 property test's pass/fail result. Follow `eval/checkpoint_first_map.py` / `eval/checkpoint_trench.py`'s established pattern: a `run_checkpoint(out_dir, ...) -> dict` function, a matplotlib figure saved to PNG (Agg backend), a paired `tests/test_checkpoint_*.py` asserting the dict's key facts and that the PNG exists/is non-empty.
+
+### General process notes that made Phase 4 go smoothly, worth repeating for Phase 5
+- **Read the exact Build Map section for each ticket before writing code** (`DRISHTI_Build_Map.md`, Phase 5 is lines ~738-836) — the numeric acceptance criteria above are lifted directly from it; guessing plausible-sounding numbers instead of reading the ticket wastes a retry cycle.
+- **Check for existing config values before assuming you need to add new ones** — this session, `vehicle_ugv.yaml` already had every constant Tickets #38 and #40 need (`min_object_t_m`, `min_object_w_m`, `braking_a_ms2`, `t_react_s`), added presumably in an earlier session in anticipation. Grep configs first.
+- **Write the test the ticket explicitly says to write first** (e.g. #39's `test_unknown_past_r_blind`, #36's slope test in Phase 4) before general coverage — these are the ones the Build Map itself flags as most likely to catch the "obvious but wrong" implementation.
+- **Run the full test suite after each ticket**, not just the new file's tests — Phase 4 caught zero regressions doing this, but it's cheap insurance and this codebase has genuine cross-module coupling (e.g. `grid/clipmap.py` getting a new method for `observability/`).
+- **Sync to remote and re-run tests there too before declaring a ticket done**, if planning to eventually run anything Phase-5-related on GPU (unlikely for pure CPU-bound geometry/logic like #38-42, but #43's checkpoint may want the trained model — sync then).
