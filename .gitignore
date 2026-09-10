@@ -6,3 +6,14 @@ data/
 *.egg-info/
 .DS_Store
 *.zip
+
+# ------ Training outputs (generated, not source) ------
+*.pt             # model checkpoints (large binaries)
+*.pth
+checkpoints/
+checkpoints_remote/
+channel_stats.json
+val_metrics_epoch*.json
+
+# ------ JSON runtime outputs ------
+*.json
