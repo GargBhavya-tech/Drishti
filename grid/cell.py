@@ -65,3 +65,75 @@ def expected_stamp(i: int, j: int, N: int) -> int:
     i_tag = (i >> shift) & 0xFF
     j_tag = (j >> shift) & 0xFF
     return (i_tag << 8) | j_tag
+
+
+def expected_stamp_batch(gi: np.ndarray, gj: np.ndarray, N: int) -> np.ndarray:
+    """Vectorised expected_stamp -- same formula, for Ticket #18's scatter
+    kernel to tag many touched cells at once without a Python loop."""
+    shift = N.bit_length() - 1
+    i_tag = (gi.astype(np.int64) >> shift) & 0xFF
+    j_tag = (gj.astype(np.int64) >> shift) & 0xFF
+    return ((i_tag << 8) | j_tag).astype(np.uint16)
+
+
+# ---------------------------------------------------------------------------
+# class_conf byte (Bible Part 9.3): 4 bits class | 4 bits confidence.
+#
+# The Bible names the confidence nibble kappa (Part 11's sparsity-derived
+# confidence) -- but kappa isn't computed until Ticket #38/#39 (Phase 5).
+# Build Map Ticket #19 gives this nibble an earlier, explicit, provisional
+# job instead: "store the runner-up fraction in the confidence nibble."
+# That is what this module implements now; whatever writes kappa later
+# (#38/#39) will need to decide whether it overwrites or composes with
+# this value -- flagged here rather than left implicit.
+# ---------------------------------------------------------------------------
+
+CLASS_NIBBLE_MAX = 0xF  # 4 bits -- DrishtiClass has 10 members (0-9), fits with room to spare
+CONF_NIBBLE_STEPS = 0xF  # 4 bits -> 16 levels, 0..15
+
+
+def encode_class_conf(class_id: int, runner_up_fraction: float) -> np.uint8:
+    """Pack a winning class id and a confidence-nibble value (Ticket #19:
+    the runner-up fraction) into one byte. High nibble = class, low
+    nibble = confidence, quantised to 1/15 steps."""
+    class_nibble = int(class_id) & CLASS_NIBBLE_MAX
+    conf_nibble = int(round(min(max(runner_up_fraction, 0.0), 1.0) * CONF_NIBBLE_STEPS)) & 0xF
+    return np.uint8((class_nibble << 4) | conf_nibble)
+
+
+def decode_class_conf(byte: int) -> tuple[int, float]:
+    """Inverse of encode_class_conf -> (class_id, confidence_fraction)."""
+    class_id = (int(byte) >> 4) & 0xF
+    conf_nibble = int(byte) & 0xF
+    return class_id, conf_nibble / CONF_NIBBLE_STEPS
+
+
+def encode_class_conf_batch(class_id: np.ndarray, runner_up_fraction: np.ndarray) -> np.ndarray:
+    """Vectorised encode_class_conf for Ticket #19's scatter_class kernel."""
+    class_nibble = class_id.astype(np.uint8) & CLASS_NIBBLE_MAX
+    conf_nibble = (
+        np.round(np.clip(runner_up_fraction, 0.0, 1.0) * CONF_NIBBLE_STEPS).astype(np.uint8) & 0xF
+    )
+    return ((class_nibble << 4) | conf_nibble).astype(np.uint8)
+
+
+# ---------------------------------------------------------------------------
+# Ticket #21 -- v2 ceiling layer fields (Bible Part 9.3: h_ceil_min,
+# h_ceil_max, "sentinel = no ceiling"). NO_CEILING must decode to +inf
+# clearance, never 0 -- a cell reporting zero clearance is LETHAL, and a
+# bug here would silently turn "nothing above you" into "you cannot move."
+# int16's minimum (-32768) can never be a real encoded height (encode_h's
+# valid range is clamped to +-327.67 m, i.e. +-32767), so it is safe to
+# reserve as a sentinel with no collision against real data.
+# ---------------------------------------------------------------------------
+
+NO_CEILING_SENTINEL = np.int16(-32768)
+
+
+def decode_clearance(h_ceil_min_raw: int, h_max_raw: int) -> float:
+    """Ground layer's h_max and ceiling layer's h_ceil_min (both raw 1cm
+    fixed-point int16) -> clearance in metres. +inf when h_ceil_min_raw
+    is the NO_CEILING sentinel."""
+    if int(h_ceil_min_raw) == int(NO_CEILING_SENTINEL):
+        return float("inf")
+    return decode_h(h_ceil_min_raw) - decode_h(h_max_raw)

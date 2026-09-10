@@ -21,7 +21,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 
 from grid.addressing import flat_index, global_to_storage, is_power_of_two, world_to_global
-from grid.cell import OBS_UNOBSERVED, OBSERVABILITY_MASK, decode_h, expected_stamp
+from grid.cell import NO_CEILING_SENTINEL, OBS_UNOBSERVED, OBSERVABILITY_MASK, decode_h, expected_stamp
 from sensor.schedule import Level, generate_schedule
 from sensor.sensor_model import SensorConfig
 
@@ -98,6 +98,20 @@ class Clipmap:
         # Part 10.1); every unwritten cell is correctly "never observed".
         self.flags = np.zeros((L, N * N), dtype=np.uint8)
         self.stamp = np.zeros((L, N * N), dtype=np.uint16)
+        # Ticket #20 -- 8-bin per-cell height histogram, packed as one
+        # uint8 count per bin (8 bytes/cell). Added on top of the Ticket
+        # #11 v1 layout, like `stamp` -- excluded from memory_bytes_v1()
+        # for the same reason (a later, separately-justified plane, not
+        # part of the Part 9.3 baseline byte count).
+        self.histogram = np.zeros((L, N * N, 8), dtype=np.uint8)
+        # Ticket #21 -- v2 ceiling layer (Bible Part 9.3). Default =
+        # NO_CEILING_SENTINEL, NOT 0 -- 0 would decode as "a ceiling
+        # sitting at ground level", a bogus zero-clearance reading on
+        # every untouched cell. h_min/h_max (Ticket #18) become the
+        # GROUND layer's range once a ceiling is extracted; for a
+        # single-layer cell they are unchanged (ground IS the only layer).
+        self.h_ceil_min = np.full((L, N * N), NO_CEILING_SENTINEL, dtype=np.int16)
+        self.h_ceil_max = np.full((L, N * N), NO_CEILING_SENTINEL, dtype=np.int16)
 
         # Current window's lower-left global cell index, per level.
         self.origin_i: List[int] = [0] * L
@@ -195,6 +209,9 @@ class Clipmap:
         self.class_conf[level, flat_idx] = 0
         self.flags[level, flat_idx] = 0
         self.stamp[level, flat_idx] = 0
+        self.histogram[level, flat_idx, :] = 0
+        self.h_ceil_min[level, flat_idx] = NO_CEILING_SENTINEL
+        self.h_ceil_max[level, flat_idx] = NO_CEILING_SENTINEL
 
     def _reset_all(self, level: int) -> None:
         self.h_min[level, :] = 0
@@ -205,6 +222,9 @@ class Clipmap:
         self.class_conf[level, :] = 0
         self.flags[level, :] = 0
         self.stamp[level, :] = 0
+        self.histogram[level, :, :] = 0
+        self.h_ceil_min[level, :] = NO_CEILING_SENTINEL
+        self.h_ceil_max[level, :] = NO_CEILING_SENTINEL
 
     # ------------------------------------------------------------------
     # Ticket #15 -- lookup(): the only public read path

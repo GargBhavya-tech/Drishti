@@ -59,3 +59,41 @@ def flat_index(si: int, sj: int, N: int) -> int:
 def global_to_world(i: int, j: int, c_l: float) -> Tuple[float, float]:
     """Global cell index -> the cell's lower-left world corner."""
     return i * c_l, j * c_l
+
+
+# ---------------------------------------------------------------------------
+# Vectorised (torch) companions -- same three formulas above, batched over a
+# whole point cloud for Ticket #18's scatter kernel. Deliberately re-derived
+# from the same math rather than looping the scalar functions per point (a
+# Python loop over 34k-120k points is fatal, per that ticket's own spec) --
+# kept here, next to the scalar originals, so there is exactly one place
+# that defines "how world coordinates become a storage index" instead of
+# two implementations that could silently drift apart.
+# ---------------------------------------------------------------------------
+
+import torch  # noqa: E402  (kept after the scalar section deliberately)
+
+
+def world_to_global_batch(coord: "torch.Tensor", c_l: float) -> "torch.Tensor":
+    """Vectorised world_to_global for one axis at a time: a (P,) float
+    tensor of world coordinates -> a (P,) int64 tensor of global indices.
+    `torch.div(..., rounding_mode='floor')`, NOT plain `/` then `.long()`
+    -- the latter truncates toward zero for negative values, the exact
+    truncation-vs-floor bug Ticket #10 warns about, just in tensor form.
+    """
+    return torch.div(coord, c_l, rounding_mode="floor").long()
+
+
+def global_to_storage_batch(idx: "torch.Tensor", N: int) -> "torch.Tensor":
+    """Vectorised global_to_storage for one axis: (P,) int64 global indices
+    -> (P,) int64 storage indices in [0, N). `&` on a signed int64 tensor
+    matches Python's two's-complement `&` for negative values (verified:
+    both agree with `i mod N` for every case tested)."""
+    _assert_power_of_two(N)
+    return idx & (N - 1)
+
+
+def flat_index_batch(si: "torch.Tensor", sj: "torch.Tensor", N: int) -> "torch.Tensor":
+    """Vectorised flat_index: row-major `sj * N + si`, matching the scalar
+    version exactly."""
+    return sj * N + si
