@@ -9,7 +9,7 @@ README only orients you inside the code.
 
 ## Status
 
-Tickets **#1–#5** are built (see `DRISHTI_Build_Map.md` for what each covers):
+**Phase 0 (Tickets #1–#9) is complete.** See `DRISHTI_Build_Map.md` for what each ticket covers.
 
 | Ticket | What | Where |
 |---|---|---|
@@ -18,8 +18,16 @@ Tickets **#1–#5** are built (see `DRISHTI_Build_Map.md` for what each covers):
 | #3 | RELLIS-3D loader + background download script | `perception/rellis_loader.py`, `scripts/download_rellis.sh` |
 | #4 | `SensorModel` — the seven formulas | `sensor/sensor_model.py`, `configs/sensor_*.yaml` |
 | #5 | Resolution schedule generator | `sensor/schedule.py` |
+| #6 | 🚨 THE GATE — point-distribution validation | `eval/point_distribution.py` |
+| #7 | Verify mount height from calibration | `sensor/calibration.py` |
+| #8 | Taxonomy remap | `perception/taxonomy.py` |
+| #9 | Vehicle config | `configs/vehicle_ugv.yaml`, `sensor/vehicle_config.py` |
 
-Everything downstream (#6 onward) is not yet built.
+**Honest gap in #6/#7:** no real sweep data exists in this environment (nuScenes-mini and RELLIS-3D haven't been downloaded here). So #6 and #7 are tested against synthetic sweeps built to an exact known grid — this proves the *measurement code* is correct, which is a real and necessary step, but it is not the same as passing the gate against real data. Once you've downloaded nuScenes-mini (see below) or RELLIS-3D, the first thing to do is call `validate_point_distribution()` and `cross_check_mount_height()` against a handful of real sweeps and look at `eval/out/sensor_validation.png` yourself — do not treat the synthetic-data tests as having already cleared the gate.
+
+**Honest gap in #8:** the RELLIS-3D class *names* are confirmed against the dataset's documentation, but the numeric class IDs its `.label` files actually use were not confirmed against an authoritative `ontology.yaml` — I could not find one online while building this. `perception/taxonomy.py`'s RELLIS dict is keyed by name specifically so this gap can't silently produce a wrong mapping; it needs the real ontology file (should ship with the annotations download) cross-checked before it's trusted against real `.label` files.
+
+Ticket #10 onward (the clipmap, Phase 1) is not yet built.
 
 ## Layout
 
