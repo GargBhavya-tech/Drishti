@@ -1,7 +1,8 @@
 __pycache__/
 *.pyc
 .pytest_cache/
-eval/out/
+eval/out/*
+!eval/out/*.png
 data/
 *.egg-info/
 .DS_Store
