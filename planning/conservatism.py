@@ -136,6 +136,37 @@ INFORMATION_DEFICIT_TABLE = (
 )
 
 
+def deficit_floor(cell: CellState) -> float:
+    """The evidence-quality FLOOR alone (Bible Part 16's information-
+    deficit table, rows 1-4 and 9-11 of `INFORMATION_DEFICIT_TABLE`),
+    independent of class. Extracted from `cost()` below (pure
+    extract-method refactor, no behaviour change -- Ticket #42's
+    property test passing unchanged after this split IS the evidence
+    of that) so Ticket #49's real traversability-driven costmap can
+    combine this SAME floor with real geometry, replacing this module's
+    own placeholder class-based costs, without re-deriving or
+    duplicating the deficit logic -- see `planning.costmap.cost()`.
+    """
+    floor = FREE_COST
+    if cell.observability == OBS_UNOBSERVED:
+        floor = max(floor, UNKNOWN_COST)
+    if cell.observability == OBS_OCCLUDED:
+        floor = max(floor, UNKNOWN_COST)
+    if cell.sparsity_verdict in (SparsityVerdict.SPARSE_STRUCTURED, SparsityVerdict.UNKNOWN):
+        floor = max(floor, UNKNOWN_COST)
+    if not cell.step_height_known:
+        floor = max(floor, UNKNOWN_COST)
+    if not cell.incidence_usable and not cell.has_positive_water_signature:
+        floor = max(floor, UNKNOWN_COST)
+    if cell.provisional or cell.inferred:
+        floor = max(floor, _PROVISIONAL_INFERRED_FLOOR)
+    if cell.count <= 1:
+        floor = max(floor, _SINGLE_POINT_FLOOR)
+    if cell.class_confidence < _LOW_CONFIDENCE_THRESHOLD:
+        floor = max(floor, _LOW_CONFIDENCE_FLOOR)
+    return floor
+
+
 def cost(cell: CellState, vehicle: VehicleConfig) -> float:
     """The public decision surface Part 16's invariant is stated over.
     Any fast path bypassing this function is, by definition, unsupported
@@ -156,30 +187,10 @@ def cost(cell: CellState, vehicle: VehicleConfig) -> float:
     # would silently LOWER a cell's cost if its class was already known
     # to be worse than UNKNOWN_COST (e.g. a confirmed STATIC_OBSTACLE) --
     # forgetting a wall must never make routing through it look safer.
-    # Rows 1-4, 9-11 of the table above become FLOOR contributions
-    # (deficit_floor), never a direct return.
     class_id = cell.class_id if cell.class_id is not None else int(DrishtiClass.UNKNOWN)
     class_based = _CLASS_BASE_COST.get(class_id, UNKNOWN_COST)
 
-    deficit_floor = FREE_COST
-    if cell.observability == OBS_UNOBSERVED:
-        deficit_floor = max(deficit_floor, UNKNOWN_COST)
-    if cell.observability == OBS_OCCLUDED:
-        deficit_floor = max(deficit_floor, UNKNOWN_COST)
-    if cell.sparsity_verdict in (SparsityVerdict.SPARSE_STRUCTURED, SparsityVerdict.UNKNOWN):
-        deficit_floor = max(deficit_floor, UNKNOWN_COST)
-    if not cell.step_height_known:
-        deficit_floor = max(deficit_floor, UNKNOWN_COST)
-    if not cell.incidence_usable and not cell.has_positive_water_signature:
-        deficit_floor = max(deficit_floor, UNKNOWN_COST)
-    if cell.provisional or cell.inferred:
-        deficit_floor = max(deficit_floor, _PROVISIONAL_INFERRED_FLOOR)
-    if cell.count <= 1:
-        deficit_floor = max(deficit_floor, _SINGLE_POINT_FLOOR)
-    if cell.class_confidence < _LOW_CONFIDENCE_THRESHOLD:
-        deficit_floor = max(deficit_floor, _LOW_CONFIDENCE_FLOOR)
-
-    base = max(class_based, deficit_floor)
+    base = max(class_based, deficit_floor(cell))
 
     # Row 12: confidence decay with age -- cost rises toward
     # UNKNOWN_COST as a cell goes stale, saturating there (Part 16's own
