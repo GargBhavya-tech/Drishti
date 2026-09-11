@@ -1,4 +1,10 @@
-# DRISHTI — First Real GPU Training Run
+# DRISHTI — GPU Training Runs
+
+Two real GPU training runs so far. Run #1 (below) trained on a single RELLIS-3D sequence; Run #2 (section 2) repeated the exact same setup across all 5 available sequences and is the better checkpoint to use going forward — see its own "Comparison" subsection for why.
+
+---
+
+# Run #1 — First Real GPU Training Run
 
 **Date:** 2026-09-11  
 **GPU:** NVIDIA RTX 2080 Ti (11 GB), `172.16.192.12`  
@@ -105,8 +111,112 @@ The trained model at **0.328 mIoU is 3.6× above the majority-class baseline**.
 
 ---
 
-## Next Steps (Phase 4+)
+## Next Steps (from Run #1, superseded by Run #2 below)
 
-- Ticket #31+: observability flag, negative obstacles, sparsity envelope, temporal fusion, fovea
-- Improve rare-class coverage: more sequences or data augmentation
-- Run Ticket #6 (the gate) against real Ouster OS1-64 data to verify sensor config
+- Improve rare-class coverage: more sequences or data augmentation — **done, see Run #2**.
+
+---
+
+# Run #2 — All 5 RELLIS-3D Sequences
+
+**Date:** 2026-09-11 (same day, following session)
+**GPU:** NVIDIA RTX 2080 Ti (11 GB), `172.16.192.12`
+**Dataset:** RELLIS-3D, ALL 5 sequences (00000-00004), Ouster OS1-64 stream
+**Script:** `perception/train.py` (now with multi-sequence support, added this session)
+**Config:** `configs/sensor_ouster_os1_64.yaml`
+**Output dir:** `checkpoints_multi/` (remote) / `checkpoints_multi_remote/` (local)
+
+## Why this run happened
+
+Run #1 plateaued around epoch 5-6 at mIoU ≈ 0.32, with classes 1, 3, 4, 6 essentially unlearned (see Run #1's "Known Limitations"). The working hypothesis was data scarcity/diversity, not model capacity — one 30-minute sequence with 2 classes entirely absent and several others down to single or double-digit pixel counts. The user had already downloaded zip archives covering all 5 RELLIS-3D sequences (not just 00004), so `perception/train.py` was extended to accept multiple `--sequence-dir` values (splitting and validating each sequence independently, then concatenating — see `HANDOFF.md` section 4c for the implementation), and the same 20-epoch recipe was re-run across all 5.
+
+## Setup
+
+| | |
+|---|---|
+| Train frames | 11,522 (across all 5 sequences, last 15% of EACH held out independently) |
+| Val frames | 2,034 |
+| Epochs | 20 |
+| Batch size | 4 |
+| Optimizer | AdamW, LR=3e-4, OneCycleLR |
+| Precision | AMP (mixed, CUDA) |
+| Avg epoch time | ~1040-1170s (~17-20 min) — proportionally longer than Run #1's ~142s, matching the ~6.6x larger dataset |
+| Total wall-clock | ~5.8 hours |
+
+## Per-class Pixel Counts (Sampled Training Frames)
+
+| DrishtiClass | Run #1 pixels | Run #2 pixels |
+|---|---|---|
+| 0 | 41,305 | 48,084 |
+| 1 | 4 | 32,652 |
+| 2 | 38,413 | 15,951 |
+| 3 | 39,456 | 19,392 |
+| 4 | 665 | 2,976 |
+| 5 (majority) | 1,208,192 (89.2%) | 1,373,897 (89.8%) |
+| 6 | 99 | 580 |
+| 7 | 26,553 | 35,955 |
+| 8 | 0 ⚠️ | 0 ⚠️ |
+| 9 | 0 ⚠️ | 0 ⚠️ |
+
+Class 1 went from 4 pixels (unusably rare) to 32,652 — the single biggest coverage improvement, and it shows directly in the IoU table below. Classes 8/9 stay at zero in BOTH runs — this is permanent by design (see "A note on classes 8/9" below), not something more data will ever fix.
+
+## Validation mIoU (per epoch)
+
+| Epoch | Train Loss | mIoU |
+|---|---|---|
+| 0 | 1.7147 | 0.1838 |
+| 1 | 1.0004 | 0.3621 |
+| 2 | 0.7355 | 0.4091 |
+| 3 | 0.6075 | 0.4498 |
+| 4 | 0.5666 | 0.4664 |
+| 5 | 0.5380 | 0.4805 |
+| 6 | 0.5097 | 0.4700 |
+| 7 | 0.4864 | 0.4947 |
+| 8 | 0.4677 | 0.5075 |
+| 9 | 0.4490 | 0.5388 |
+| 10 | 0.4369 | 0.5450 |
+| 11 | 0.4226 | 0.5471 |
+| 12 | 0.4094 | 0.5550 |
+| 13 | 0.3956 | 0.5471 |
+| 14 | 0.3848 | 0.5543 |
+| 15 | 0.3730 | 0.5552 |
+| 16 | 0.3641 | 0.5617 |
+| 17 | 0.3576 | 0.5614 |
+| 18 | 0.3549 | 0.5612 |
+| 19 | 0.3529 | **0.5618** |
+
+Converged cleanly, no divergence/NaN. Effectively plateaued from epoch ~12 onward (0.545-0.562 band) — epoch 19 is the technical best but within noise of epochs 12-19; any of those checkpoints (`checkpoint_epoch12.pt` through `checkpoint_epoch19.pt`) would be a reasonable pick, not just the final one.
+
+## Per-class IoU at Final Epoch (19)
+
+| DrishtiClass | Run #1 (epoch 16 best) | Run #2 (epoch 19) |
+|---|---|---|
+| 0 | 0.914 | 0.779 |
+| 1 | 0.014 | **0.841** |
+| 2 | 0.105 | 0.155 |
+| 3 | 0.000 | **0.462** |
+| 4 | 0.000 | 0.000 |
+| 5 | 0.912 | 0.970 |
+| 6 | 0.000 | **0.532** |
+| 7 | 0.679 | 0.755 |
+| 8 | n/a | n/a |
+| 9 | n/a | n/a |
+| **mIoU** | **0.328** | **0.562** |
+
+## Comparison: why Run #2 is the better checkpoint
+
+- **mIoU improved 71% relative** (0.328 → 0.562) from the same architecture, same hyperparameters, same epoch count — purely from more/more-diverse training data.
+- **Classes 1, 3, and 6 went from effectively unlearned (0.00-0.01 IoU) to genuinely useful (0.46-0.84 IoU)** — direct confirmation the Run #1 plateau was a data problem, not a model-capacity or architecture problem.
+- Class 0 dropped slightly (0.914 → 0.779) and class 2 stayed weak (0.105 → 0.155) — not fully understood yet; worth a closer look (confusion matrix / qualitative inspection) before assuming this is fine, rather than just celebrating the mIoU headline.
+- **Class 4 stayed at exactly 0.0 in both runs** despite 2,976 pixels in Run #2 (vs. 665 in Run #1) — still may be too rare, or genuinely hard to separate from a visually similar class. Worth investigating specifically before more training compute goes into a straight re-run.
+
+## A note on classes 8/9
+
+`NEGATIVE_OBSTACLE` (8) and `OVERHANG` (9) show `n/a` / zero pixels in every run and always will, **by deliberate design, not a dataset gap**: `perception/taxonomy.py`'s own docstring states no dataset's semantic labels are permitted to map onto these two classes — they are geometry-derived only. Phase 4 (`observability/negative_obstacle.py`, `observability/raycast.py`, `observability/observe.py`), built in the session after this training run, is what actually detects these — a separate mechanism, not something FusionSegNet's training data will ever grow a signal for.
+
+## Next Steps
+
+- **Ticket #38+ (Phase 5)**: sparsity/Claim 3, speed envelope/Claim 4, conservatism — see `HANDOFF.md` section 9 for concrete guidance.
+- **Tickets #31/#32**: cache inference from this checkpoint (`checkpoints_multi_remote/checkpoint.pt` or `checkpoint_epoch19.pt`) and build the semantically-colored map checkpoint — now that a genuinely useful trained model exists, unlike when these tickets were previously deferred.
+- Investigate class 0's regression and class 2/4's continued weakness before assuming the model is "done" — don't just report the headline mIoU number without checking these.
+- Run Ticket #6 (the gate) against real Ouster OS1-64 data to verify the sensor config's `d_theta_rad`/`d_phi_rad` — still unverified against real data in both runs.

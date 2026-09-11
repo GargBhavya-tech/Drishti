@@ -159,7 +159,7 @@ Changed this session (all changes tested — see `test_build_multi_sequence_spli
 - CLI: `--sequence-dir` now takes `nargs="+"` — pass multiple paths space-separated.
 - This is a **backward-compatible, additive change** — nothing about single-sequence training changed.
 
-### 4d. Run #2 — all 5 sequences at once — **IN PROGRESS, check status before assuming anything**
+### 4d. Run #2 — all 5 sequences at once — **COMPLETE**
 
 Launched into a **fresh** `~/drishti/checkpoints_multi/` directory (deliberately NOT reusing `checkpoints/`, which holds Run #1's completed 20-epoch results — reusing it would make the resume logic see "epoch 20 already done" and skip training entirely):
 
@@ -173,31 +173,18 @@ ssh -i "$HOME/.ssh/id_ed25519_drishti_gpu" -o BatchMode=yes utkarsh@172.16.192.1
 ```
 
 - **11,522 training frames, 2,034 held out** (across all 5 sequences).
-- **Per-class pixel counts improved immediately** vs. Run #1 — classes 1, 2, 3, 4, 6 now all have thousands of sample pixels (previously near-zero with just sequence 00004), confirming the hypothesis that Run #1's plateau was a data-diversity problem. Only classes 8/9 stay at zero pixels — expected, see 4a above, this is permanent by design, not a dataset gap.
-- **~1170-1200s (~19.5-20 min) per epoch** (6.6x more data than Run #1, so proportionally slower) — full 20 epochs is roughly **~6.5 hours** wall-clock from launch.
-- **Last confirmed status (check freshly, don't trust this number)**: epoch 1/19 complete, val mIoU = **0.3621** — already exceeding Run #1's FINAL (epoch 19) result of 0.3220, after just 2 epochs. Class 0 jumped to 0.665 IoU, class 1 to 0.690 IoU (both were ~0 in Run #1) — strong early confirmation more data is helping exactly where predicted.
+- **Per-class pixel counts improved immediately** vs. Run #1 — classes 1, 2, 3, 4, 6 all had thousands of sample pixels (previously near-zero with just sequence 00004), confirming the hypothesis that Run #1's plateau was a data-diversity problem. Only classes 8/9 stayed at zero pixels — expected, see 4a above, this is permanent by design, not a dataset gap.
+- Ran ~5.8 hours wall-clock (~1040-1170s/epoch, ~6.6x more data than Run #1's ~142s/epoch, proportionally slower as expected).
+- **Final result (epoch 19/19, confirmed complete — process exited cleanly, no traceback): val mIoU = 0.5618** — a 71% relative improvement over Run #1's final 0.3220. Classes 1, 3, and 6 went from effectively unlearned (0.00-0.01 IoU) to genuinely useful (0.46-0.84 IoU); class 5 improved to 0.97. Class 0 dropped slightly (0.914→0.779, not yet investigated) and class 4 stayed at exactly 0.0 in both runs (still may be too rare, or genuinely confusable with a similar class — worth investigating before assuming more training data alone will fix it).
+- **Full per-epoch table, per-class breakdown, and analysis: see `TRAINING_RESULTS.md`'s "Run #2" section** — written this session, has the complete story.
 
-**Check current status:**
-```bash
-ssh -i "$HOME/.ssh/id_ed25519_drishti_gpu" -o BatchMode=yes utkarsh@172.16.192.12 \
-  "tail -20 ~/drishti/checkpoints_multi/train.log; echo ---; ps aux | grep perception.train | grep -v grep"
-```
-If `ps aux` shows no `perception.train` processes, it finished (or died) — check the log's last lines for either a clean "Epoch 19" completion or a Python traceback.
-
-**Pull results down locally** (mirrors Run #1's pattern, into a NEW folder so it doesn't clobber Run #1's pulled results in `checkpoints_remote/`):
+**All 43 result files (20 `checkpoint_epochN.pt`, final `checkpoint.pt`, 20 `val_metrics_epochN.json`, `train.log`, `channel_stats.json` — 1.4GB total) have been pulled down and verified locally in `checkpoints_multi_remote/`.** If you need to re-pull for any reason:
 ```bash
 mkdir -p checkpoints_multi_remote
-scp -i ~/.ssh/id_ed25519_drishti_gpu utkarsh@172.16.192.12:~/drishti/checkpoints_multi/checkpoint.pt checkpoints_multi_remote/
-scp -i ~/.ssh/id_ed25519_drishti_gpu utkarsh@172.16.192.12:"~/drishti/checkpoints_multi/val_metrics_epoch*.json" checkpoints_multi_remote/
-scp -i ~/.ssh/id_ed25519_drishti_gpu utkarsh@172.16.192.12:~/drishti/checkpoints_multi/train.log checkpoints_multi_remote/
+scp -i ~/.ssh/id_ed25519_drishti_gpu -r utkarsh@172.16.192.12:~/drishti/checkpoints_multi/* checkpoints_multi_remote/
 ```
 
-Or use `scripts/sync_training_results.ps1` (PowerShell, polls every 20s by default) — **it currently defaults to the OLD `checkpoints` remote dir**, so run it with `-RemoteDir "~/drishti/checkpoints_multi"` to watch Run #2 instead:
-```powershell
-.\scripts\sync_training_results.ps1 -RemoteDir "~/drishti/checkpoints_multi" -LocalDir "checkpoints_multi_remote"
-```
-
-**You do NOT need to keep the laptop on for training to continue** — it's fully detached on the remote server via `nohup`/`disown`. The laptop is only needed to watch/pull results.
+The effective plateau is epoch ~12 onward (mIoU 0.545-0.562 band) — `checkpoint_epoch19.pt` (or `checkpoint.pt`, the same thing) is the technical best, but any checkpoint from epoch 12-19 is a reasonable pick for downstream use (e.g. Tickets #31/#32's cache-inference/semantic-map checkpoint, now unblocked with a genuinely useful trained model).
 
 ---
 
