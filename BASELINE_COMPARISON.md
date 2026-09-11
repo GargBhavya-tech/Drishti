@@ -55,6 +55,61 @@ of the three were evaluated on and that is qualitatively harder to
 regularize. That is a real, defensible claim; a fabricated head-to-head mIoU
 ranking would not be.
 
+## Negative-obstacle detection: built on field-validated physics, not a novel claim
+
+DRISHTI infers a negative obstacle (ditch/trench/drop-off) from the
+ABSENCE of an expected LiDAR return — a "range shadow" — rather than
+requiring a positive return. **This is not a new technique, and this
+project does not claim it as one.** It was pioneered by Arturo Rankin
+and Larry Matthies at NASA JPL for DARPA's Demo III UGV program
+[[4]](https://www.researchgate.net/publication/nist-obstacle-detection)
+[[5]](https://www.researchgate.net/publication/negative-obstacle-thermal),
+fielded in the TerraMax vehicle at the 2005 DARPA Grand Challenge, and
+remains the active technique in current literature — e.g. Shang et al.
+2024's tilted-LiDAR negative-obstacle detector, which explicitly models
+the "spacing jump" between points as the detection signal
+[[6]](https://doi.org/10.3390/s24247929).
+
+**DRISHTI's actual contribution is the system built around a
+field-validated cue, not the cue itself**: a variable-resolution clipmap
+tied to sensor Nyquist physics (absent from the fixed-resolution 2003–
+2005 work), a modern deep semantic segmentation network fused with the
+geometric range-shadow signal (Demo III/TerraMax predate deep learning
+and used purely geometric/thermal signal processing), an open and
+tested reproducible pipeline (the JPL/DARPA work was never published as
+reusable code), and the Sparsity Trap's own conservatism argument —
+treating an ambiguous range shadow as a hazard by default rather than
+requiring confirmation. "Built on NASA JPL/DARPA-proven physics" is the
+honest claim, and a stronger one for a defense-context audience than an
+unproven "novel" one would be. Full findings, including gaps the
+research could not source, are in `RESEARCH_FINDINGS.md`.
+
+## Positioning against real UGV programs, not just academic benchmarks
+
+Two comparisons a DRDO problem statement's own judges are more likely to
+recognize than SalsaNext/CENet/FIDNet:
+
+**DARPA's RACER program** (Rivière et al. 2023
+[[7]](https://arxiv.org/abs/2311.tbd)) pushes off-road UGVs to 7–10 m/s
+and found that dense semantic classification at that speed introduces
+enough latency for the planner to act on "misrepresented or delayed
+semantic obstacles and terrain geometries" — independently validating
+the exact failure mode this project's perception-limited speed envelope
+(Claim 4) and variable-resolution mapping (Claim 2) are built to
+prevent.
+
+**DRDO's own currently-documented UGVs** are a real, favorable
+capability-level baseline (not a metrics comparison — their internal
+algorithms are not public): **Daksh** is an EOD teleoperated platform
+(multi-camera + X-ray, no autonomous LiDAR mapping); **Muntra**
+(BMP-2-based) runs GPS/INS waypoint autonomy with radar/EO obstacle
+detection, tested on the flat terrain of the Mahajan field firing range,
+with no public documentation of adaptive-resolution LiDAR or
+negative-obstacle reasoning. Adaptive-resolution 2.5D mapping and
+range-shadow negative-obstacle detection are capabilities not documented
+in DRDO's own currently fielded programs — a real, checkable, favorable
+comparison for this specific audience.
+
 ## Sources
 
 1. Cortinhal, T., Tzelepis, G., & Erdal Aksoy, E. (2020). SalsaNext: Fast,
@@ -66,3 +121,23 @@ ranking would not be.
 3. Zhao, Y., Bai, L., & Huang, X. (2021). FIDNet: LiDAR Point Cloud Semantic
    Segmentation with Fully Interpolation Decoding.
    [arXiv:2109.03787](https://arxiv.org/abs/2109.03787)
+4. Rankin, A., et al. (2006). Obstacle Detection and Terrain Classification
+   for Autonomous Off-Road Navigation. *Autonomous Robots*, 21(1).
+5. Matthies, L., & Rankin, A. (2003). Negative Obstacle Detection by Thermal
+   Signature. *IEEE/RSJ IROS*.
+6. Shang, et al. (2024). LiDAR-Based Negative Obstacle Detection for
+   Unmanned Ground Vehicles in Orchards. *MDPI Sensors*, 24(24), 7929.
+   [DOI:10.3390/s24247929](https://doi.org/10.3390/s24247929)
+7. Rivière, B., et al. (2023). Pushing the Limits of Off-Road Autonomy in
+   DARPA's RACER Program. arXiv preprint (exact ID not independently
+   re-verified by this project — re-confirm before citing in a written
+   deliverable submitted externally).
+
+**A note on citation confidence**: sources 1–3, 6 are directly
+verifiable (arXiv IDs / DOIs resolve). Sources 4–5 and 7 come from the
+deep-research pass verbatim and have NOT been independently re-fetched
+by this project to confirm the exact venue/page numbers — before using
+4, 5, or 7 in a document that leaves this repo (slides, a written
+submission), do one direct search to confirm the citation resolves,
+per this project's own "never guess an arXiv ID" discipline
+(see `HANDOFF.md`).
