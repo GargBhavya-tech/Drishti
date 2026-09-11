@@ -20,19 +20,28 @@ Confirmation status of the two source lists:
 
 - RELLIS_TO_DRISHTI: keyed by class NAME. RELLIS_ID_TO_NAME (below) maps
   the numeric IDs `.label` files actually store to those names.
-  CROSS-CHECKED (2026-09-10) against real downloaded data: loaded 20
-  real frames from sequence 00004's `os1_cloud_node_semantickitti_
-  label_id/`, and the exact set of numeric IDs observed --
-  {0,3,4,8,17,19,27,33,34} -- matches this table precisely (0=void,
-  3=grass, 4=tree, 8=vehicle, 17=person, 19=bush, 27=barrier, 33=mud,
-  34=rubble), with a plausible off-road distribution (57% void, 26%
-  grass, small vehicle/person counts). IDs not observed in that 20-frame
-  sample (dirt, pole, water, sky, object, asphalt, building, log, fence,
-  concrete, puddle) are taken from RELLIS-3D's published ontology and
-  are NOT independently re-verified here -- if training produces odd
-  per-class behaviour on one of those specific classes, check this table
-  against the dataset's own `ontology.yaml` (ships with the annotations
-  download) before assuming the network is at fault.
+  CROSS-CHECKED against real downloaded data, expanded 2026-09-11 from
+  an earlier 20-frame/1-sequence check to 783 frames sampled across ALL
+  5 local sequences (00000-00004): the observed numeric-ID set is
+  {0,3,4,5,6,8,9,10,15,17,18,19,23,27,31,33,34} -- 17 of this table's 20
+  entries, up from 9 -- and every one of them matches an entry already
+  in RELLIS_ID_TO_NAME below (no surprise/unmapped ID ever fell through
+  to the UNKNOWN fallback in `rellis_label_ids_to_drishti`). Newly
+  confirmed since the first check: 5=pole, 6=water, 9=object, 10=asphalt,
+  15=log, 18=fence, 23=concrete, 31=puddle.
+
+  Still NOT observed anywhere across all 5 sequences: 1 (dirt), 7 (sky),
+  12 (building). `sky` (7) may be permanently unobservable by a LiDAR
+  regardless of how much more data is sampled -- there is no physical
+  surface for a beam aimed at open sky to reflect off, so RELLIS-3D's
+  camera-derived `sky` label plausibly never appears in the LiDAR
+  `.label` files at all, which would make this a structural non-gap
+  rather than a data-coverage gap. `dirt` (1) and `building` (12) remain
+  genuine open items -- these 5 sequences' specific routes may simply
+  not pass over bare dirt or past a building; if training produces odd
+  per-class behaviour on either, check this table against the dataset's
+  own `ontology.yaml` (ships with the annotations download) before
+  assuming the network is at fault.
 """
 
 from __future__ import annotations
