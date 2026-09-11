@@ -18,3 +18,4 @@ val_metrics_epoch*.json
 
 # ------ JSON runtime outputs ------
 *.json
+!frontend/**/*.json
