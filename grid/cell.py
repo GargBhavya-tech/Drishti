@@ -3,19 +3,111 @@ grid/cell.py
 
 Fixed-point height encode/decode and the observability sub-field of the
 `flags` byte (Bible Part 9.3, Part 10.1). Small pure helpers shared by
-`grid/clipmap.py` (Tickets #11, #13, #14, #15).
+`grid/clipmap.py` (Tickets #11, #13, #14, #15, #17).
 
-Ticket #11 ships flat 1 cm int16 height quantisation everywhere -- the
-per-level foveated quantum (1/2/4/8 cm for L0..L3) is Ticket #17, an
-explicit "cheap force-in" deferred to D11 in the Build Map. Do not read
-level-varying precision into encode_h/decode_h until #17 lands.
+Ticket #17 -- foveated height quantum, completed. `encode_h`/`decode_h`
+now take an optional `level` (default 0, so every pre-#17 call site --
+`encode_h(z)`, `decode_h(v)` -- is unchanged, bit-for-bit): L0 keeps the
+original flat 1cm/int16 absolute encoding exactly; L1-L3 use a coarser
+quantum (2/4/8cm, Bible Part 9.3) and store the height as an int8 OFFSET
+from a per-TILE base elevation rather than an absolute int16 value --
+matching the sensor's own vertical sampling growing coarser with range
+(Part 3: ~74cm vertical spacing at L3's Nyquist radius; storing sub-cm
+precision there is exactly the error this project criticises a uniform
+XY grid for making).
+
+Per-tile base elevation, and how its lifecycle is kept correct (Ticket
+#17's own "Watch out": "a model will apply the quantum but forget the
+per-tile base, so coarse levels lose absolute elevation" -- getting the
+QUANTUM right is the easy half; keeping the BASE consistent across many
+independent writes and clear-on-scroll cycles is the actual risk):
+
+- Tiles are TILE_SIZE x TILE_SIZE STORAGE cells (toroidal, same indexing
+  as everything else in this module) -- coarser than a cell, finer than
+  a whole level, so real local terrain fits comfortably within one
+  int8's relative range around a shared base.
+- A tile's base is set ONCE, from whichever write FIRST makes any of its
+  cells observed (flags != 0) again after being fully clear -- and then
+  HELD FIXED for as long as at least one cell in that tile stays
+  observed. Every later write to the SAME tile re-encodes relative to
+  that SAME base, never a freshly recomputed one -- recomputing on every
+  write would silently invalidate every OTHER already-encoded cell in
+  the tile (they were encoded relative to the OLD base), which is
+  exactly the kind of thing that "looks" like it works until two writes
+  land in the same tile at different times.
+- This means `grid.clipmap.Clipmap.get_or_create_tile_bases()` --  not
+  this module -- decides whether to reuse or (re)create a base, since
+  that decision needs to inspect the LIVE clipmap's own `flags` plane.
+  This module only provides the pure encode/decode math once a base is
+  known.
 """
 
 from __future__ import annotations
 
+from typing import Union
+
 import numpy as np
 
-H_QUANTUM_M = 0.01  # 1 cm, flat across all levels until Ticket #17
+H_QUANTUM_M = 0.01  # 1 cm -- L0's quantum, and the base for level_quantum's scaling
+
+# Ticket #17's per-level quantum schedule (Bible Part 9.3): 1, 2, 4, 8 cm
+# for L0-L3.
+def quantum_for_level(level: int) -> float:
+    return H_QUANTUM_M * (2 ** level)
+
+
+INT8_LO, INT8_HI = -128, 127
+
+# Per-tile base-elevation plane (Ticket #17). TILE_SIZE=16 chosen so real
+# local terrain stays comfortably within one int8's relative range at
+# every level's quantum (worst case, L1's 2cm quantum: int8 covers
+# +-2.56m around the base, over a tile spanning 16 cells x 10cm/cell =
+# 1.6m at L1 -- ample margin) while keeping the base plane's own
+# overhead small (1024 tiles/level at N=512, 8KB total across 4 levels
+# -- see Clipmap.memory_bytes_v2's own accounting, which discloses this
+# rather than pretending it's free).
+TILE_SIZE = 16
+
+# Sentinel for "this tile has no live cells right now" -- distinct from
+# NO_CEILING_SENTINEL (different plane, different meaning) even though
+# it happens to reuse the same numeric value, matching this codebase's
+# existing convention (int16's minimum can never be a real 1cm-quantised
+# height within the +-327.67m the L0/tile-base encoding actually uses).
+TILE_BASE_UNSET = np.int16(-32768)
+
+
+def n_tiles_per_axis(N: int, tile_size: int = TILE_SIZE) -> int:
+    if N % tile_size != 0:
+        raise ValueError(f"N={N} is not a multiple of tile_size={tile_size}")
+    return N // tile_size
+
+
+def tile_index(si: int, sj: int, n_tiles_axis: int, tile_size: int = TILE_SIZE) -> int:
+    """Storage index (si, sj) -> flat tile index. Tiles tile the SAME
+    storage grid cells do, just coarser -- (si // tile_size, sj //
+    tile_size), row-major, matching grid.addressing.flat_index's own
+    sj*N+si convention so the two stay easy to reason about together."""
+    ti, tj = si // tile_size, sj // tile_size
+    return tj * n_tiles_axis + ti
+
+
+def tile_index_batch(si: np.ndarray, sj: np.ndarray, n_tiles_axis: int, tile_size: int = TILE_SIZE) -> np.ndarray:
+    ti = si // tile_size
+    tj = sj // tile_size
+    return tj * n_tiles_axis + ti
+
+
+def tile_member_flat_indices(tile_idx: int, n_tiles_axis: int, N: int, tile_size: int = TILE_SIZE) -> np.ndarray:
+    """All storage flat indices belonging to one tile -- used only to
+    check whether a tile currently has any live (observed) cell before
+    deciding whether to reuse or recreate its base (see module
+    docstring); tile_size^2 indices, small and bounded."""
+    ti = tile_idx % n_tiles_axis
+    tj = tile_idx // n_tiles_axis
+    si_range = np.arange(ti * tile_size, (ti + 1) * tile_size)
+    sj_range = np.arange(tj * tile_size, (tj + 1) * tile_size)
+    si_grid, sj_grid = np.meshgrid(si_range, sj_range)
+    return (sj_grid * N + si_grid).ravel()
 
 # Observability sub-field: the low two bits of the `flags` byte (Bible
 # Part 10.1, Part 23 edge-case table: "Unobserved cells read as flat
@@ -30,15 +122,64 @@ OBS_OCCLUDED = 3
 OBSERVABILITY_MASK = 0b11
 
 
-def encode_h(z_m: float) -> np.int16:
-    """Metres -> 1 cm fixed-point int16. round(), not truncate, so 1.234
-    round-trips to 1.23 m rather than being biased toward zero."""
-    return np.int16(round(z_m / H_QUANTUM_M))
+def encode_h(z_m: float, level: int = 0, base_elevation_m: float = 0.0) -> Union[np.int16, np.int8]:
+    """Ticket #17: metres -> fixed-point int, level-scaled quantum.
+
+    level=0 (default): UNCHANGED from the original Ticket #11 encoding --
+    1cm quantum, absolute int16, round() not truncate (1.234 round-trips
+    to 1.23m, not 1.0m). base_elevation_m must be 0.0 here -- L0 never
+    uses a tile base, it stores absolute height directly, same as before
+    #17 existed. Every pre-#17 caller (`encode_h(z)`) gets bit-identical
+    output to before.
+
+    level>=1: quantum scales per quantum_for_level (2/4/8cm for L1-L3);
+    the VALUE stored is `round((z_m - base_elevation_m) / quantum)`,
+    clamped to int8's range -- an OFFSET from whatever base the caller
+    supplies (see grid.clipmap.Clipmap.get_or_create_tile_bases for how
+    that base is chosen and kept consistent across writes)."""
+    quantum = quantum_for_level(level)
+    if level == 0:
+        if base_elevation_m != 0.0:
+            raise ValueError("base_elevation_m must be 0.0 at level 0 -- L0 stores absolute height, never tile-relative")
+        return np.int16(round(z_m / quantum))
+    offset = round((z_m - base_elevation_m) / quantum)
+    offset = max(INT8_LO, min(INT8_HI, offset))
+    return np.int8(offset)
 
 
-def decode_h(v: int) -> float:
-    """1 cm fixed-point int16 -> metres."""
-    return float(v) * H_QUANTUM_M
+def decode_h(v: int, level: int = 0, base_elevation_m: float = 0.0) -> float:
+    """Inverse of encode_h. level=0: UNCHANGED (`float(v) * H_QUANTUM_M`,
+    base_elevation_m ignored/must be 0.0 -- not enforced here since a
+    read path should never fail loudly over a caller passing 0.0
+    explicitly, but a nonzero base at level 0 is a caller bug)."""
+    quantum = quantum_for_level(level)
+    if level == 0:
+        return float(v) * quantum
+    return base_elevation_m + float(v) * quantum
+
+
+def encode_h_batch(z_m: np.ndarray, level: int, base_elevation_m) -> np.ndarray:
+    """Vectorised encode_h for Ticket #18/#21's scatter kernels. `level`
+    is a single scalar (all points in one call share a level, matching
+    how grid.scatter/grid.layers already loop per-level); `base_elevation_m`
+    is either a scalar (level 0, must be 0.0) or a (P,) array giving each
+    point's OWN tile's base (level>=1 -- different points can land in
+    different tiles within the same batch)."""
+    quantum = quantum_for_level(level)
+    if level == 0:
+        if np.any(np.asarray(base_elevation_m) != 0.0):
+            raise ValueError("base_elevation_m must be 0.0 at level 0")
+        return np.round(z_m / quantum).astype(np.int16)
+    offset = np.round((z_m - base_elevation_m) / quantum)
+    offset = np.clip(offset, INT8_LO, INT8_HI)
+    return offset.astype(np.int8)
+
+
+def decode_h_batch(v: np.ndarray, level: int, base_elevation_m) -> np.ndarray:
+    quantum = quantum_for_level(level)
+    if level == 0:
+        return v.astype(np.float64) * quantum
+    return np.asarray(base_elevation_m, dtype=np.float64) + v.astype(np.float64) * quantum
 
 
 def expected_stamp(i: int, j: int, N: int) -> int:

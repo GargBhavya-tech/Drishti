@@ -21,7 +21,7 @@ import numpy as np
 import torch
 
 from grid.addressing import flat_index_batch, global_to_storage_batch, world_to_global_batch
-from grid.cell import H_QUANTUM_M, OBS_OCCUPIED, encode_class_conf_batch, expected_stamp_batch
+from grid.cell import H_QUANTUM_M, OBS_OCCUPIED, encode_class_conf_batch, encode_h_batch, expected_stamp_batch
 from grid.clipmap import Clipmap
 
 COUNT_MAX = 65535  # uint16 max -- count must saturate, never wrap (Ticket #18 "Watch out" #3)
@@ -143,18 +143,31 @@ def _write_touched_cells(
     variance: np.ndarray,
     count: np.ndarray,
 ) -> None:
-    # Clip defensively to int16's representable range (Part 9.3: 1 cm
-    # fixed point, +-327.67 m) before casting -- silent wraparound on an
-    # out-of-range height would be exactly the kind of invisible bug this
-    # project keeps guarding against elsewhere (count saturation, N&(N-1)).
-    int16_lo, int16_hi = -327.67, 327.67
-    h_max_c = np.clip(h_max, int16_lo, int16_hi)
-    h_min_c = np.clip(h_min, int16_lo, int16_hi)
-    h_mean_c = np.clip(h_mean, int16_lo, int16_hi)
+    if level == 0:
+        # UNCHANGED from before Ticket #17: absolute int16, 1cm quantum.
+        # Clip defensively to int16's representable range (Part 9.3: 1 cm
+        # fixed point, +-327.67 m) before casting -- silent wraparound on
+        # an out-of-range height would be exactly the kind of invisible
+        # bug this project keeps guarding against elsewhere (count
+        # saturation, N&(N-1)).
+        int16_lo, int16_hi = -327.67, 327.67
+        h_max_c = np.clip(h_max, int16_lo, int16_hi)
+        h_min_c = np.clip(h_min, int16_lo, int16_hi)
+        h_mean_c = np.clip(h_mean, int16_lo, int16_hi)
+        cm.h_max[level, flat_idx] = np.round(h_max_c / H_QUANTUM_M).astype(np.int16)
+        cm.h_min[level, flat_idx] = np.round(h_min_c / H_QUANTUM_M).astype(np.int16)
+        cm.h_mean[level, flat_idx] = np.round(h_mean_c / H_QUANTUM_M).astype(np.int16)
+    else:
+        # Ticket #17: resolve each touched cell's TILE base BEFORE
+        # setting flags below -- get_or_create_tile_bases decides
+        # fresh-vs-reuse from the tile's CURRENT (pre-this-write) flags,
+        # and setting flags first would make a genuinely-first write look
+        # like it's reusing itself as evidence the tile was already live.
+        base_m = cm.get_or_create_tile_bases(level, flat_idx, representative_z_m=h_mean)
+        cm.h_max[level, flat_idx] = encode_h_batch(h_max, level, base_m)
+        cm.h_min[level, flat_idx] = encode_h_batch(h_min, level, base_m)
+        cm.h_mean[level, flat_idx] = encode_h_batch(h_mean, level, base_m)
 
-    cm.h_max[level, flat_idx] = np.round(h_max_c / H_QUANTUM_M).astype(np.int16)
-    cm.h_min[level, flat_idx] = np.round(h_min_c / H_QUANTUM_M).astype(np.int16)
-    cm.h_mean[level, flat_idx] = np.round(h_mean_c / H_QUANTUM_M).astype(np.int16)
     cm.h_m2[level, flat_idx] = np.clip(
         np.round(variance / _VARIANCE_QUANTUM_M2), 0, 65535
     ).astype(np.uint16)

@@ -83,9 +83,18 @@ def test_v1_memory_allocation_matches_reference_figure(hdl64e):
 
 def test_soa_planes_are_c_contiguous(hdl64e):
     cm = Clipmap(hdl64e, n_levels=4, N=512, c0=0.05)
-    for name in ("h_min", "h_max", "h_mean", "h_m2", "count", "class_conf", "flags", "stamp"):
+    for name in ("h_m2", "count", "class_conf", "flags", "stamp"):
         arr = getattr(cm, name)
         assert arr.flags["C_CONTIGUOUS"], f"{name} is not C-contiguous"
+
+    # h_min/h_max/h_mean are Ticket #17's LeveledPlane (mixed int16/int8
+    # per level, not one big (L, N*N) array) -- check each level's own
+    # backing array individually instead.
+    for name in ("h_min", "h_max", "h_mean"):
+        plane = getattr(cm, name)
+        for level in range(len(cm.levels)):
+            arr = plane[level]
+            assert arr.flags["C_CONTIGUOUS"], f"{name} level {level} is not C-contiguous"
 
 
 def test_unobserved_is_the_zero_value_by_construction(hdl64e):

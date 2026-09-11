@@ -23,7 +23,7 @@ import numpy as np
 import torch
 
 from grid.addressing import flat_index_batch, global_to_storage_batch, world_to_global_batch
-from grid.cell import H_QUANTUM_M, NO_CEILING_SENTINEL
+from grid.cell import H_QUANTUM_M, NO_CEILING_SENTINEL, encode_h_batch
 from grid.clipmap import Clipmap
 from grid.histogram import HistogramSpec, histogram_spec
 from sensor.vehicle_config import VehicleConfig
@@ -189,10 +189,23 @@ def scatter_layers(
         ground_max_vals = ground_max_scratch[touched].numpy()
         ceiling_min_vals = ceiling_min_scratch[touched].numpy()
 
+        ground_flat = touched_np[has_ground.numpy()]
         int16_lo, int16_hi = -327.67, 327.67
-        ground_max_c = np.clip(ground_max_vals, int16_lo, int16_hi)
-        ground_max_enc = np.round(ground_max_c / H_QUANTUM_M).astype(np.int16)
-        cm.h_max[level, touched_np[has_ground.numpy()]] = ground_max_enc[has_ground.numpy()]
+        ground_max_c = np.clip(ground_max_vals[has_ground.numpy()], int16_lo, int16_hi)
+        if level == 0:
+            # UNCHANGED from before Ticket #17.
+            cm.h_max[level, ground_flat] = np.round(ground_max_c / H_QUANTUM_M).astype(np.int16)
+        else:
+            # Ticket #17: this re-narrows h_max for cells scatter() (#18)
+            # already wrote THIS SAME frame, so their tile is already
+            # live and get_or_create_tile_bases reuses scatter()'s own
+            # base -- the ground layer's max gets encoded relative to
+            # the SAME reference as everything else in that tile, not a
+            # second, inconsistent one. representative_z_m is only used
+            # as a fallback if the tile somehow isn't live yet (not the
+            # documented call order, but still handled correctly).
+            base_m = cm.get_or_create_tile_bases(level, ground_flat, representative_z_m=ground_max_c)
+            cm.h_max[level, ground_flat] = encode_h_batch(ground_max_c, level, base_m)
 
         ceil_flat = touched_np[has_ceiling.numpy()]
         ceiling_min_c = np.clip(ceiling_min_vals[has_ceiling.numpy()], int16_lo, int16_hi)
