@@ -7,12 +7,13 @@
  * 3D view).
  */
 
-import { OrbitControls } from "@react-three/drei"
+import { Line, OrbitControls } from "@react-three/drei"
 import { Canvas, useFrame } from "@react-three/fiber"
 import { useEffect, useMemo, useRef } from "react"
 import * as THREE from "three"
 import { foveaSampleGrid } from "../lib/foveaMath"
 import type { DemoFrame } from "../lib/mockData"
+import { costGridFromFrame, findPath } from "../lib/pathPlanner"
 import { CLASS_COLOR, OBSERVABILITY_COLOR } from "../lib/theme"
 import type { OverlayMode } from "../state/store"
 import { useDashboardStore } from "../state/store"
@@ -167,6 +168,50 @@ function FoveaOverlay() {
   )
 }
 
+const PATH_GRID_HALF = 34 // matches mockData.ts's own GRID_HALF -- kept in sync explicitly, not re-derived
+const PATH_START: [number, number] = [PATH_GRID_HALF - 30, PATH_GRID_HALF + 17] // i=-30, j=17
+const PATH_GOAL: [number, number] = [PATH_GRID_HALF + 30, PATH_GRID_HALF + 17] // i=+30, j=17 -- straight
+// across the pedestrian's own j-range (14-20, see mockData.ts's pedestrianPositionAt), so the
+// direct route genuinely crosses the moving hazard's path at some point in the sequence.
+
+/** Ticket #49's real planner interface, made visible: an A* route
+ * (planning/path_planner.py, ported to TS in pathPlanner.ts) recomputed
+ * EVERY frame from the CURRENT cost grid -- so the line drawn here
+ * visibly bends around the moving pedestrian and any static hazards,
+ * not a scripted animation. Bible Part 14's own framing: "a path
+ * re-routing around a pedestrian shows CONSEQUENCE." */
+function PlannedPath({ frame }: { frame: DemoFrame }) {
+  const result = useMemo(() => {
+    const { grid, size } = costGridFromFrame(frame, PATH_GRID_HALF)
+    return findPath(grid, size, size, PATH_START, PATH_GOAL)
+  }, [frame])
+
+  const points = useMemo(() => {
+    if (!result.path) return []
+    return result.path.map(([r, c]) => {
+      const i = r - PATH_GRID_HALF
+      const j = c - PATH_GRID_HALF
+      return new THREE.Vector3(i * CELL_WORLD_SIZE, 0.18, j * CELL_WORLD_SIZE)
+    })
+  }, [result])
+
+  if (points.length < 2) return null
+
+  return (
+    <>
+      <Line points={points} color="#4fe0a0" lineWidth={3} />
+      <mesh position={points[0]}>
+        <sphereGeometry args={[0.12, 12, 12]} />
+        <meshBasicMaterial color="#4fd1ff" />
+      </mesh>
+      <mesh position={points[points.length - 1]}>
+        <sphereGeometry args={[0.12, 12, 12]} />
+        <meshBasicMaterial color="#4fe0a0" />
+      </mesh>
+    </>
+  )
+}
+
 function GroundGrid() {
   return (
     <gridHelper args={[24, 48, "#1c2430", "#131a24"]} position={[0, -0.02, 0]} />
@@ -202,6 +247,7 @@ export function Scene({ frame }: { frame: DemoFrame }) {
       <GroundGrid />
       <CellField frame={frame} />
       <FoveaOverlay />
+      <PlannedPath frame={frame} />
       <Rig />
       <OrbitControls
         enableDamping

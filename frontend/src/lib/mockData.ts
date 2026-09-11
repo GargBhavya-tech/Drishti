@@ -157,6 +157,20 @@ export const DEMO_SEQUENCE = generateSequence()
  * #56, at the SAME extent as the foveated demo sequence, computed
  * once (not per playback frame) since it represents a fixed reference
  * memory figure, not a moving scene. */
+/** A naive flattened-2D occupancy view of a real frame: every
+ * NEGATIVE_OBSTACLE cell is reclassified as DRIVABLE -- exactly what a
+ * system that only asks "is there a return here" (rather than
+ * reasoning about the RANGE SHADOW behind a drop-off, Bible Part 11)
+ * would report, since the ground beyond a trench returns points same
+ * as any other ground. This is the concrete, demoable form of demo
+ * beat 1: "2D occupancy says CLEAR, DRISHTI says LETHAL." */
+export function generateFlattenedVariant(frame: DemoFrame): DemoFrame {
+  return {
+    ...frame,
+    cells: frame.cells.map((c) => (c.classId === 8 ? { ...c, classId: 1, heightM: 0 } : c)),
+  }
+}
+
 let _denseBaseline: DemoFrame | null = null
 export function generateDenseBaselineFrame(): DemoFrame {
   if (_denseBaseline) return _denseBaseline

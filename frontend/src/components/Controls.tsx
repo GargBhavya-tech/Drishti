@@ -69,6 +69,14 @@ function SplitIcon() {
     </svg>
   )
 }
+function WipeIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4">
+      <rect x="1" y="1.5" width="12" height="11" rx="1.2" />
+      <path d="M5 3 L3 7 L5 11 M9 3 L11 7 L9 11" />
+    </svg>
+  )
+}
 
 export function Timeline({ frameCount }: { frameCount: number }) {
   const frameIndex = useDashboardStore((s) => s.frameIndex)
@@ -167,6 +175,16 @@ export function SplitScreenToggle() {
   return (
     <IconButton onClick={toggleSplitScreen} active={splitScreen} label="Toggle split-screen comparison">
       <SplitIcon />
+    </IconButton>
+  )
+}
+
+export function CompareWipeToggle() {
+  const compareWipe = useDashboardStore((s) => s.compareWipe)
+  const toggleCompareWipe = useDashboardStore((s) => s.toggleCompareWipe)
+  return (
+    <IconButton onClick={toggleCompareWipe} active={compareWipe} label="Toggle 2D-vs-DRISHTI reveal comparison">
+      <WipeIcon />
     </IconButton>
   )
 }

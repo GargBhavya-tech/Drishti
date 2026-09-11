@@ -14,6 +14,7 @@ interface DashboardState {
   isPlaying: boolean
   overlayMode: OverlayMode
   splitScreen: boolean
+  compareWipe: boolean
   gamma: number
   egoSpeedMs: number
 
@@ -23,6 +24,7 @@ interface DashboardState {
   setPlaying: (v: boolean) => void
   setOverlayMode: (m: OverlayMode) => void
   toggleSplitScreen: () => void
+  toggleCompareWipe: () => void
   setGamma: (g: number) => void
   setEgoSpeedMs: (v: number) => void
 }
@@ -34,6 +36,7 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   isPlaying: true,
   overlayMode: "class",
   splitScreen: false,
+  compareWipe: false,
   gamma: 1.0,
   egoSpeedMs: 15,
 
@@ -43,7 +46,8 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   togglePlaying: () => set((s) => ({ isPlaying: !s.isPlaying })),
   setPlaying: (v) => set({ isPlaying: v }),
   setOverlayMode: (m) => set({ overlayMode: m }),
-  toggleSplitScreen: () => set((s) => ({ splitScreen: !s.splitScreen })),
+  toggleSplitScreen: () => set((s) => ({ splitScreen: !s.splitScreen, compareWipe: false })),
+  toggleCompareWipe: () => set((s) => ({ compareWipe: !s.compareWipe, splitScreen: false })),
   setGamma: (g) => set({ gamma: g }),
   setEgoSpeedMs: (v) => set({ egoSpeedMs: v }),
 }))

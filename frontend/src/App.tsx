@@ -5,7 +5,8 @@
  */
 
 import { AnimatePresence, motion } from "motion/react"
-import { GammaSlider, SplitScreenToggle, Timeline } from "./components/Controls"
+import { CompareWipeToggle, GammaSlider, SplitScreenToggle, Timeline } from "./components/Controls"
+import { ComparisonWipe } from "./components/ComparisonWipe"
 import { HUD } from "./components/HUD"
 import { Scene } from "./components/Scene"
 import { SpeedGauge } from "./components/SpeedGauge"
@@ -30,6 +31,7 @@ function Header() {
 export default function App() {
   const frameIndex = useDashboardStore((s) => s.frameIndex)
   const splitScreen = useDashboardStore((s) => s.splitScreen)
+  const compareWipe = useDashboardStore((s) => s.compareWipe)
   const frame = DEMO_SEQUENCE[frameIndex]
 
   return (
@@ -39,7 +41,18 @@ export default function App() {
       <div className="flex-1 flex min-h-0">
         <div className="relative flex-1 min-w-0">
           <AnimatePresence mode="wait">
-            {splitScreen ? (
+            {compareWipe ? (
+              <motion.div
+                key="wipe"
+                className="absolute inset-0"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: motionTokens.duration.fast }}
+              >
+                <ComparisonWipe frame={frame} />
+              </motion.div>
+            ) : splitScreen ? (
               <motion.div
                 key="split"
                 className="absolute inset-0"
@@ -77,6 +90,7 @@ export default function App() {
         <GammaSlider />
         <div className="w-px h-6 bg-white/10" />
         <SplitScreenToggle />
+        <CompareWipeToggle />
       </div>
     </div>
   )
