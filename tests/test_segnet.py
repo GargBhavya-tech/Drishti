@@ -4,17 +4,23 @@ tests/test_segnet.py
 Ticket #28 tests: forward pass shape at the project's own input size,
 deep-supervision aux head shape, parameter count sanity, and a
 structural guard that nothing camera-specific leaked into the extraction.
+
+Also covers the Ticket #25 integration fix: circular_pad.py's utility was
+previously only tested in isolation and never actually wired into this
+network's own convolutions -- see CircularConv2d's tests below and
+segnet.py's module docstring, deviation 5, for the encoder-scope note.
 """
 
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
 import pytest
 import torch
 
 import perception.segnet as segnet_module
-from perception.segnet import FusionSegNet, N_CLASSES_DEFAULT, N_INPUT_CHANNELS
+from perception.segnet import ASPP, CircularConv2d, FusionSegNet, N_CLASSES_DEFAULT, N_INPUT_CHANNELS, _dblock
 
 
 def test_eval_forward_pass_matches_ticket_28_shape():
@@ -83,7 +89,124 @@ def test_weights_are_from_scratch_not_imagenet_pretrained():
     """Deviation #1 in the module docstring: the notebook's actual code
     loads ImageNet weights despite its own docstring claiming otherwise.
     This extraction must use weights=None -- verified structurally
-    (the source calls efficientnet_b0(weights=None), not DEFAULT)."""
-    src = inspect.getsource(segnet_module.FusionSegNet.__init__)
+    (the source calls efficientnet_b0(weights=None), not DEFAULT).
+
+    Reads the file directly via ast, rather than
+    inspect.getsource(segnet_module.FusionSegNet.__init__): the latter
+    is flaky when this test runs as part of the FULL suite on this
+    project's dev environment (Python 3.14.3) -- it intermittently
+    returns a near-empty string (observed: '        )\\n') for a bound
+    method's source depending on what ran earlier in the same session,
+    even though the module's own file on disk is unchanged and the same
+    call succeeds every time in isolation. That looks like a
+    linecache/inspect interaction specific to a very new CPython
+    version under pytest's collection machinery, not a bug in this
+    file's actual content -- reading the source text straight from disk
+    sidesteps it entirely."""
+    import ast
+
+    file_path = inspect.getsourcefile(segnet_module)
+    tree = ast.parse(Path(file_path).read_text())
+
+    init_node = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == "FusionSegNet":
+            for item in node.body:
+                if isinstance(item, ast.FunctionDef) and item.name == "__init__":
+                    init_node = item
+                    break
+    assert init_node is not None, "FusionSegNet.__init__ not found in segnet.py"
+
+    lines = Path(file_path).read_text().splitlines()
+    src = "\n".join(lines[init_node.lineno - 1 : init_node.end_lineno])
+
     assert "weights=None" in src
     assert "EfficientNet_B0_Weights" not in src
+
+
+# ---------------------------------------------------------------------------
+# Ticket #25 integration fix: circular padding actually wired into the
+# network, not just built and tested in isolation (perception/circular_pad.py).
+# ---------------------------------------------------------------------------
+
+
+def test_circular_conv2d_preserves_shape():
+    """CircularConv2d must produce the same (H, W) as an equivalent
+    ordinary same-padded Conv2d -- the manual horizontal pre-pad plus
+    zero-vertical-padding-only conv must net out to "same" shape, for
+    every dilation rate ASPP actually uses.
+
+    W=50 here, not a tiny width: torch's circular padding mode cannot
+    pad more than the input's own size along an axis ("Padding value
+    causes wrapping around more than once"), so the width must exceed
+    the largest dilation (18) actually used at rate=18 -- exactly the
+    constraint ASPP's real deployment already satisfies (it only ever
+    runs on the encoder's deepest, 1/32-scale feature map, e.g. ~34 px
+    wide from this project's own 1080 px range image, still > 18)."""
+    x = torch.randn(2, 4, 5, 50)
+    for dilation in (1, 6, 12, 18):
+        conv = CircularConv2d(4, 8, kernel_size=3, dilation=dilation)
+        out = conv(x)
+        assert out.shape == (2, 8, 5, 50), f"shape changed at dilation={dilation}: {out.shape}"
+
+
+def test_circular_conv2d_is_continuous_across_the_seam():
+    """The actual property Ticket #25 exists for: a feature straddling
+    the 359/0-degree seam must produce a continuous response, not a
+    discontinuous one the way zero-padding would. Uses a single fixed
+    (non-random) kernel so the output is exactly predictable, matching
+    tests/test_circular_pad.py's own style of proof."""
+    conv = CircularConv2d(1, 1, kernel_size=3, dilation=1, bias=False)
+    with torch.no_grad():
+        conv.conv.weight.fill_(1.0 / 9.0)  # a 3x3 box filter
+
+    W = 10
+    x = torch.zeros(1, 1, 3, W)
+    x[0, 0, 1, 0] = 9.0  # a spike exactly at the seam's right side (column 0)
+    x[0, 0, 1, -1] = 9.0  # the SAME object, straddling into column W-1
+
+    out = conv(x)
+    # A pixel just left of the seam (column W-1) should "see" the spike at
+    # column 0 through the circular wrap, exactly as it would see a
+    # spike at column W-2 if the object were fully interior -- i.e. the
+    # response at the seam must be indistinguishable from an interior
+    # spike's response, not suppressed the way zero-padding would
+    # suppress it.
+    interior = torch.zeros(1, 1, 3, W)
+    interior[0, 0, 1, 4] = 9.0
+    interior[0, 0, 1, 5] = 9.0  # two adjacent columns, interior, same total energy
+    interior_out = conv(interior)
+
+    seam_peak = out[0, 0, 1, 0].item()
+    interior_peak = interior_out[0, 0, 1, 4].item()
+    assert seam_peak == pytest.approx(interior_peak, abs=1e-6), (
+        "circular wrap not applied -- the seam pixel's response should match "
+        "an equivalent interior pixel's response exactly"
+    )
+
+
+def test_aspp_branches_use_circular_conv2d():
+    aspp = ASPP(in_ch=8, out_ch=4, rates=(1, 6))
+    for branch in aspp.branches:
+        assert isinstance(branch[0], CircularConv2d), "ASPP branch's conv is not circular-padded"
+
+
+def test_dblock_convs_use_circular_conv2d():
+    block = _dblock(cin=8, cout=4)
+    conv_layers = [m for m in block if isinstance(m, (CircularConv2d, torch.nn.Conv2d))]
+    assert len(conv_layers) == 2
+    assert all(isinstance(m, CircularConv2d) for m in conv_layers), (
+        "decoder block still uses plain (zero-padded) Conv2d instead of CircularConv2d"
+    )
+
+
+def test_full_network_still_forward_passes_with_circular_padding_wired_in():
+    """Regression guard: wiring CircularConv2d into ASPP and the decoder
+    must not change FusionSegNet's output shape at the project's own
+    input size (Ticket #28's own shape test)."""
+    net = FusionSegNet(n_classes=10)
+    net.eval()
+    x = torch.randn(1, N_INPUT_CHANNELS, 32, 1080)
+    with torch.no_grad():
+        out = net(x)
+    assert out.shape == (1, 10, 32, 1080)

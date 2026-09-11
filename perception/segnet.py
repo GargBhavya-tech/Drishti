@@ -56,6 +56,22 @@ Ticket #28's test text; this module is tested against the whole-network
 framing (Part 5.1), not the encoder-only number, since cutting real
 architecture (ASPP, decoder, heads) to hit 4-4.5M would mean shipping a
 different network than the one specified.
+
+5. Ticket #25's circular horizontal padding is now actually wired into
+   this network's OWN convolutions (ASPP's dilated branches and the
+   decoder's `_dblock` convs), not just built and tested in isolation in
+   `perception/circular_pad.py` -- see `CircularConv2d` below. Bible
+   Part 4.5's rule ("replace ALL horizontal padding in the network")
+   is applied to every conv authored in this file. It is deliberately
+   NOT applied inside the EfficientNet-B0 encoder (`self.e1`..`self.e5`):
+   those are torchvision's own `MBConv`/`Conv2dNormActivation` internals,
+   several dozen depthwise/pointwise convs across 5 stages, and rewriting
+   each one's padding scheme is a materially larger and riskier change
+   than swapping the convs this file itself defines -- the same kind of
+   scope boundary this codebase already draws around the Meta-Kernel
+   (Bible Part 5.5, ablation-gated, never built). Flagged here rather
+   than silently claimed as network-wide, per this project's own
+   discipline (Principle 4: "state limitations, do not hide them").
 """
 
 from __future__ import annotations
@@ -65,8 +81,58 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.models import efficientnet_b0
 
+from perception.circular_pad import circular_pad_horizontal
+
 N_INPUT_CHANNELS = 9  # Ticket #27's assembled tensor channel count
 N_CLASSES_DEFAULT = 10  # perception.taxonomy.DrishtiClass
+
+
+class CircularConv2d(nn.Module):
+    """A 3x3 (optionally dilated) conv with circular padding on the
+    horizontal (azimuth) axis and ordinary zero padding on the vertical
+    (elevation) axis -- Ticket #25's rule, applied here instead of only
+    living as a standalone utility. The range image's left/right edges
+    are the sensor's 360-degree seam (not a real boundary); top/bottom
+    ARE real FOV boundaries (Bible Part 4.5), so only width wraps.
+
+    Implemented as manual horizontal pad (`circular_pad_horizontal`,
+    already unit-tested in isolation) + a Conv2d whose OWN padding is
+    zero on width and the usual symmetric amount on height -- not
+    `nn.Conv2d(padding_mode='circular')`, which would wrap both axes
+    uniformly and is exactly the "wraps the ground onto the sky" bug
+    Ticket #25's own docstring warns against.
+    """
+
+    def __init__(self, in_ch: int, out_ch: int, kernel_size: int = 3, dilation: int = 1, bias: bool = False):
+        super().__init__()
+        # "Same"-shape padding for stride 1: pad = dilation * (k-1) // 2.
+        pad = dilation * (kernel_size - 1) // 2
+        self._pad_w = pad
+        self.conv = nn.Conv2d(
+            in_ch, out_ch, kernel_size,
+            padding=(pad, 0), dilation=dilation, bias=bias,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        width = x.shape[-1]
+        if self._pad_w >= width:
+            # torch's circular padding cannot wrap more than once around
+            # an axis ("Padding value causes wrapping around more than
+            # once"); at ASPP's largest dilation (18) this only matters
+            # if a feature map narrower than 19px reaches here, which
+            # doesn't happen at this project's own input size (the
+            # deepest ASPP-feeding stage is ~1/32 of a >=1080px range
+            # image) -- but a future change to input width/dilation
+            # rates should fail with a clear message here, not a
+            # confusing error three frames down inside torch internals.
+            raise ValueError(
+                f"CircularConv2d: padding {self._pad_w} >= input width {width} -- "
+                f"circular padding cannot wrap more than once around an axis. "
+                f"Either the input is too narrow for this dilation rate, or the "
+                f"dilation rate is too large for this input's width."
+            )
+        x = circular_pad_horizontal(x, self._pad_w)
+        return self.conv(x)
 
 
 class SEBlock(nn.Module):
@@ -105,7 +171,7 @@ class ASPP(nn.Module):
         for r in rates:
             self.branches.append(
                 nn.Sequential(
-                    nn.Conv2d(in_ch, out_ch, 3, padding=r, dilation=r, bias=False),
+                    CircularConv2d(in_ch, out_ch, kernel_size=3, dilation=r, bias=False),
                     nn.BatchNorm2d(out_ch),
                     nn.ReLU(inplace=True),
                 )
@@ -133,8 +199,8 @@ class ASPP(nn.Module):
 
 def _dblock(cin, cout):
     return nn.Sequential(
-        nn.Conv2d(cin, cout, 3, 1, 1, bias=False), nn.BatchNorm2d(cout), nn.ReLU(inplace=True),
-        nn.Conv2d(cout, cout, 3, 1, 1, bias=False), nn.BatchNorm2d(cout), nn.ReLU(inplace=True),
+        CircularConv2d(cin, cout, kernel_size=3, bias=False), nn.BatchNorm2d(cout), nn.ReLU(inplace=True),
+        CircularConv2d(cout, cout, kernel_size=3, bias=False), nn.BatchNorm2d(cout), nn.ReLU(inplace=True),
         SEBlock(cout),  # SE attention in every decoder block
     )
 
