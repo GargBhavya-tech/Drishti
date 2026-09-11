@@ -55,22 +55,22 @@ def sample_val_items(val_items: List[Tuple[Path, int]], max_frames: int, seed: i
     return [val_items[i] for i in sorted(idx)]
 
 
-def build_confusion_matrix(
+def _confusion_matrix_for_checkpoint(
     checkpoint_path: str,
-    sequence_dirs: List[str],
+    val_sample: List[Tuple[Path, int]],
     sensor_config_path: str,
     n_classes: int,
-    max_frames: int,
     device: str = "cpu",
 ) -> Tuple[np.ndarray, int]:
+    """The per-checkpoint inference pass, over an ALREADY-CHOSEN sample
+    of val items -- factored out from `build_confusion_matrix` so
+    `compare_checkpoints` can run the SAME frames through two different
+    checkpoints, rather than two independently-sampled (and therefore
+    not directly comparable) diagnostic runs."""
     model, trained_epoch = load_trained_model(checkpoint_path, device=device)
     stats_path = Path(checkpoint_path).parent / "channel_stats.json"
     stats = load_stats(stats_path)
     sm = load_sensor_config(sensor_config_path)
-
-    _train_items, val_items, _counts = build_multi_sequence_splits([Path(d) for d in sequence_dirs])
-    val_sample = sample_val_items(val_items, max_frames)
-    print(f"Diagnosing on {len(val_sample)} sampled val frames (of {len(val_items)} total val frames)")
 
     cm = np.zeros((n_classes, n_classes), dtype=np.int64)
     with torch.no_grad():
@@ -83,6 +83,82 @@ def build_confusion_matrix(
             confusion_matrix_update(cm, pred, target, img.valid_mask, n_classes)
 
     return cm, trained_epoch
+
+
+def build_confusion_matrix(
+    checkpoint_path: str,
+    sequence_dirs: List[str],
+    sensor_config_path: str,
+    n_classes: int,
+    max_frames: int,
+    device: str = "cpu",
+) -> Tuple[np.ndarray, int]:
+    _train_items, val_items, _counts = build_multi_sequence_splits([Path(d) for d in sequence_dirs])
+    val_sample = sample_val_items(val_items, max_frames)
+    print(f"Diagnosing on {len(val_sample)} sampled val frames (of {len(val_items)} total val frames)")
+    return _confusion_matrix_for_checkpoint(checkpoint_path, val_sample, sensor_config_path, n_classes, device)
+
+
+def compare_checkpoints(
+    checkpoint_a: str,
+    checkpoint_b: str,
+    sequence_dirs: List[str],
+    sensor_config_path: str,
+    n_classes: int = 10,
+    max_frames: int = 300,
+    out_path: str = "eval/out/checkpoint_comparison.json",
+    device: str = "cpu",
+) -> dict:
+    """Run the SAME sampled val frames through two checkpoints and
+    report a direct per-class IoU diff -- "did it actually improve",
+    not two separately-run reports eyeballed side by side (which could
+    differ just from sampling a different set of frames)."""
+    _train_items, val_items, _counts = build_multi_sequence_splits([Path(d) for d in sequence_dirs])
+    val_sample = sample_val_items(val_items, max_frames)
+    print(f"Comparing on {len(val_sample)} sampled val frames (of {len(val_items)} total val frames), "
+          f"the SAME frames for both checkpoints")
+
+    cm_a, epoch_a = _confusion_matrix_for_checkpoint(checkpoint_a, val_sample, sensor_config_path, n_classes, device)
+    cm_b, epoch_b = _confusion_matrix_for_checkpoint(checkpoint_b, val_sample, sensor_config_path, n_classes, device)
+
+    ious_a = per_class_iou(cm_a)
+    ious_b = per_class_iou(cm_b)
+    miou_a = float(np.nanmean(ious_a))
+    miou_b = float(np.nanmean(ious_b))
+
+    print(f"\n=== Checkpoint comparison ({len(val_sample)} frames, identical for both) ===")
+    print(f"A: {checkpoint_a} (epoch {epoch_a}) -- mIoU {miou_a:.4f}")
+    print(f"B: {checkpoint_b} (epoch {epoch_b}) -- mIoU {miou_b:.4f}")
+    print(f"Delta (B - A): {miou_b - miou_a:+.4f}\n")
+    print(f"{'class':<28}{'A':>10}{'B':>10}{'delta':>10}")
+    for c in range(n_classes):
+        name = CLASS_NAMES[c] if c < len(CLASS_NAMES) else str(c)
+        a_val, b_val = ious_a[c], ious_b[c]
+        a_str = "n/a" if np.isnan(a_val) else f"{a_val:.4f}"
+        b_str = "n/a" if np.isnan(b_val) else f"{b_val:.4f}"
+        delta_str = "n/a" if (np.isnan(a_val) or np.isnan(b_val)) else f"{b_val - a_val:+.4f}"
+        label = f"{c} ({name}):"
+        print(f"{label:<28}{a_str:>10}{b_str:>10}{delta_str:>10}")
+
+    result = {
+        "checkpoint_a": checkpoint_a,
+        "checkpoint_b": checkpoint_b,
+        "epoch_a": epoch_a,
+        "epoch_b": epoch_b,
+        "n_frames_sampled": len(val_sample),
+        "miou_a": miou_a,
+        "miou_b": miou_b,
+        "miou_delta": miou_b - miou_a,
+        "per_class_iou_a": [None if np.isnan(v) else float(v) for v in ious_a],
+        "per_class_iou_b": [None if np.isnan(v) else float(v) for v in ious_b],
+        "confusion_matrix_a": cm_a.tolist(),
+        "confusion_matrix_b": cm_b.tolist(),
+    }
+    out_path_p = Path(out_path)
+    out_path_p.parent.mkdir(parents=True, exist_ok=True)
+    out_path_p.write_text(json.dumps(result, indent=2))
+    print(f"\nFull comparison saved to {out_path_p}")
+    return result
 
 
 def report_top_confusions(cm: np.ndarray, class_id: int, top_k: int = 3) -> None:
@@ -172,18 +248,35 @@ def run_diagnosis(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Diagnose per-class confusion for a trained FusionSegNet checkpoint")
     parser.add_argument("--checkpoint", default="checkpoints_multi_remote/checkpoint_epoch19.pt")
+    parser.add_argument(
+        "--checkpoint-b",
+        default=None,
+        help="If given, COMPARE --checkpoint (A) against this checkpoint (B) on the same sampled "
+             "frames instead of running a single-checkpoint diagnosis.",
+    )
     parser.add_argument("--sequence-dirs", nargs="+", default=[f"data/rellis/{i:05d}" for i in range(5)])
     parser.add_argument("--sensor-config", default="configs/sensor_ouster_os1_64.yaml")
     parser.add_argument("--max-frames", type=int, default=300)
-    parser.add_argument("--out", default="eval/out/confusion_matrix.json")
+    parser.add_argument("--out", default=None)
     parser.add_argument("--device", default="cpu")
     args = parser.parse_args()
 
-    run_diagnosis(
-        checkpoint_path=args.checkpoint,
-        sequence_dirs=args.sequence_dirs,
-        sensor_config_path=args.sensor_config,
-        max_frames=args.max_frames,
-        out_path=args.out,
-        device=args.device,
-    )
+    if args.checkpoint_b:
+        compare_checkpoints(
+            checkpoint_a=args.checkpoint,
+            checkpoint_b=args.checkpoint_b,
+            sequence_dirs=args.sequence_dirs,
+            sensor_config_path=args.sensor_config,
+            max_frames=args.max_frames,
+            out_path=args.out or "eval/out/checkpoint_comparison.json",
+            device=args.device,
+        )
+    else:
+        run_diagnosis(
+            checkpoint_path=args.checkpoint,
+            sequence_dirs=args.sequence_dirs,
+            sensor_config_path=args.sensor_config,
+            max_frames=args.max_frames,
+            out_path=args.out or "eval/out/confusion_matrix.json",
+            device=args.device,
+        )
