@@ -1,0 +1,27 @@
+Training on 11522 frames from RELLIS-3D [00000 (2847 frames), 00001 (2319 frames), 00002 (4147 frames), 00003 (2184 frames), 00004 (2059 frames)] (held out 2034 frames total, last 15% by index, per sequence)
+Loaded channel stats from checkpoints_multi_v2/channel_stats.json (not recomputed)
+Per-class pixel counts (sampled train frames):
+  class 0: 48084
+  class 1: 32652
+  class 2: 15951
+  class 3: 19392
+  class 4: 2976
+  class 5: 1373897
+  class 6: 580
+  class 7: 35955
+  class 8: 0
+  class 9: 0
+WARNING: classes [8, 9] have ZERO pixels in the sampled training data -- they cannot learn anything and will report IoU=NaN. Check before burning GPU hours.
+Initialised model weights from checkpoints_multi/checkpoint_epoch19.pt (fresh optimizer/scheduler/epoch count)
+Class weights (secondary CE term only, mean-normalised inverse-sqrt-frequency):
+  class 0: 0.400
+  class 1: 0.486
+  class 2: 0.695
+  class 3: 0.630
+  class 4: 1.608
+  class 5: 0.075
+  class 6: 3.643
+  class 7: 0.463
+  class 8: 0.000
+  class 9: 0.000
+Majority-class baseline: class 5 (89.8% of sampled pixels)

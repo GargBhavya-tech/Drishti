@@ -112,14 +112,30 @@ def confidence_weighted_ce_loss(
     targets: torch.Tensor,
     valid_mask: torch.Tensor,
     confidence: Optional[torch.Tensor] = None,
+    class_weight: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     """logits: (B, C, H, W). targets/valid_mask/confidence: (B, H, W).
     confidence defaults to uniform 1.0 (plain CE) until Ticket #38/39's
-    kappa exists to supply a real one."""
+    kappa exists to supply a real one.
+
+    `class_weight`: an OPTIONAL (C,) per-class weight, kept as a
+    SEPARATE argument from `confidence` rather than folded into it --
+    confidence is reserved for kappa's own eventual per-PIXEL signal
+    (Part 5.4), while class_weight is a per-CLASS constant addressing
+    training-set imbalance (Bible Part 5.4's own framing: Lovász
+    already handles imbalance for the primary term by averaging
+    per-class IoU unweighted across classes present -- see
+    `lovasz_softmax_flat` -- so class_weight is scoped to THIS
+    secondary term only, not applied to Lovász, which would double-
+    count the same correction). Passed straight to `F.cross_entropy`'s
+    own `weight` argument, which already excludes absent classes
+    correctly via the normal CE gradient (no separate handling needed
+    for classes 8/9, which never appear in `targets` by taxonomy
+    design -- see perception/taxonomy.py)."""
     logits_v, targets_v, conf_v = _flatten_valid(logits, targets, valid_mask, confidence)
     if logits_v.shape[0] == 0:
         return logits.sum() * 0.0
-    per_pixel = F.cross_entropy(logits_v, targets_v, reduction="none")
+    per_pixel = F.cross_entropy(logits_v, targets_v, weight=class_weight, reduction="none")
     if conf_v is not None:
         per_pixel = per_pixel * conf_v
     return per_pixel.mean()
@@ -133,10 +149,15 @@ class DrishtiSegLoss(nn.Module):
     reasonably and left configurable rather than hardcoded as unlabelled
     magic numbers -- tune during actual training (Ticket #30)."""
 
-    def __init__(self, ce_weight: float = 0.5, aux_weight: float = 0.4):
+    def __init__(self, ce_weight: float = 0.5, aux_weight: float = 0.4, class_weight: Optional[torch.Tensor] = None):
         super().__init__()
         self.ce_weight = ce_weight
         self.aux_weight = aux_weight
+        # Registered as a buffer (not a plain attribute) so it moves
+        # with the module under .to(device) -- a class_weight left on
+        # the wrong device would raise at the first forward() call
+        # under AMP/CUDA rather than silently doing nothing.
+        self.register_buffer("class_weight", class_weight, persistent=False)
 
     def forward(
         self,
@@ -147,7 +168,7 @@ class DrishtiSegLoss(nn.Module):
         aux_logits: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         primary = lovasz_softmax_loss(logits, targets, valid_mask)
-        secondary = confidence_weighted_ce_loss(logits, targets, valid_mask, confidence)
+        secondary = confidence_weighted_ce_loss(logits, targets, valid_mask, confidence, class_weight=self.class_weight)
         total = primary + self.ce_weight * secondary
 
         if aux_logits is not None:

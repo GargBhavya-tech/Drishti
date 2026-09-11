@@ -31,7 +31,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import time
+from dataclasses import replace as dataclass_replace
 from pathlib import Path
 from typing import Optional
 
@@ -98,15 +100,65 @@ def _load_frame(sequence_dir: Path, frame_idx: int, sm: SensorConfig):
     return img, ground, target
 
 
+# Augmentation constants -- chosen to stay physically plausible (a real
+# sensor's own range noise is a few percent, not tens), not tuned
+# against any specific metric.
+AUG_JITTER_PROB = 0.5
+AUG_JITTER_RANGE = (0.95, 1.05)  # multiplicative, applied to x/y/z/range TOGETHER (radial)
+AUG_ROLL_PROB = 0.5  # circular azimuth shift -- the network's own circular padding makes this "free"
+AUG_FLIP_PROB = 0.5  # azimuth mirror -- LiDAR has no inherent left/right asymmetry
+
+
+def _apply_radial_jitter(img, rng: random.Random):
+    """Scale x, y, z, AND range by the SAME random factor -- a radial
+    jitter along each point's own bearing, keeping range consistent
+    with sqrt(x^2+y^2+z^2) (Ticket #23's own invariant). Applied to the
+    RangeImage BEFORE normalisation (`assemble_input_tensor`), not to
+    the already-normalised tensor -- multiplying a zero-centred
+    normalised value by a scalar does not correspond to "+-5% of real
+    distance" the way multiplying the RAW metre value does."""
+    factor = rng.uniform(*AUG_JITTER_RANGE)
+    return dataclass_replace(img, x=img.x * factor, y=img.y * factor, z=img.z * factor, range=img.range * factor)
+
+
+def _apply_spatial_augmentation(tensor: torch.Tensor, target: torch.Tensor, valid_mask: torch.Tensor, rng: random.Random):
+    """Circular roll and/or mirror flip along the AZIMUTH (W) axis,
+    applied to `tensor`, `target`, AND `valid_mask` TOGETHER -- a
+    pixel and its label/validity must move as one unit. (A prior draft
+    of this augmentation rolled/flipped only tensor+target and left
+    valid_mask untouched, which would silently apply each mask bit to
+    the WRONG post-shift pixel -- caught before this was ever run.)
+    """
+    if rng.random() < AUG_ROLL_PROB:
+        shift = rng.randint(0, tensor.shape[-1] - 1)
+        tensor = torch.roll(tensor, shift, dims=2)
+        target = torch.roll(target, shift, dims=1)
+        valid_mask = torch.roll(valid_mask, shift, dims=1)
+    if rng.random() < AUG_FLIP_PROB:
+        tensor = torch.flip(tensor, dims=[2])
+        target = torch.flip(target, dims=[1])
+        valid_mask = torch.flip(valid_mask, dims=[1])
+    return tensor, target, valid_mask
+
+
 class RellisSegDataset(Dataset):
     """One item = one frame: (input_tensor (9,H,W), target (H,W) int64,
     valid_mask (H,W) bool). `items` is a list of (sequence_dir, frame_idx)
-    pairs, so a single dataset can span multiple RELLIS-3D sequences."""
+    pairs, so a single dataset can span multiple RELLIS-3D sequences.
 
-    def __init__(self, items: list, sm: SensorConfig, stats: ChannelStats):
+    `is_train=True` enables augmentation (radial jitter + circular
+    roll + azimuth mirror); the validation dataset must be constructed
+    with `is_train=False` (the default) so held-out metrics measure
+    the model on UNMODIFIED frames, matching the ticket's own "no
+    shuffle-split, no leakage" discipline extended to "no augmentation
+    leakage into the number you report."""
+
+    def __init__(self, items: list, sm: SensorConfig, stats: ChannelStats, is_train: bool = False):
         self.items = list(items)
         self.sm = sm
         self.stats = stats
+        self.is_train = is_train
+        self._rng = random.Random()
 
     def __len__(self):
         return len(self.items)
@@ -114,12 +166,46 @@ class RellisSegDataset(Dataset):
     def __getitem__(self, i: int):
         sequence_dir, frame_idx = self.items[i]
         img, ground, target = _load_frame(sequence_dir, frame_idx, self.sm)
-        tensor = assemble_input_tensor(img, ground, self.stats)
-        return (
-            torch.from_numpy(tensor).float(),
-            torch.from_numpy(target).long(),
-            torch.from_numpy(img.valid_mask).bool(),
-        )
+
+        if self.is_train and self._rng.random() < AUG_JITTER_PROB:
+            img = _apply_radial_jitter(img, self._rng)
+
+        tensor_np = assemble_input_tensor(img, ground, self.stats)
+        tensor = torch.from_numpy(tensor_np).float()
+        target_t = torch.from_numpy(target).long()
+        valid_t = torch.from_numpy(img.valid_mask).bool()
+
+        if self.is_train:
+            tensor, target_t, valid_t = _apply_spatial_augmentation(tensor, target_t, valid_t, self._rng)
+
+        return tensor, target_t, valid_t
+
+
+def compute_class_weights(class_counts: np.ndarray, n_classes: int) -> torch.Tensor:
+    """Inverse-SQRT-frequency weights (dampens extremes vs. plain
+    inverse -- a class 461x rarer than the majority would otherwise
+    get a 461x weight, overcorrecting hard enough to destabilise the
+    classes that were already learning well), MEAN-normalised (not
+    sum-normalised) so the overall CE loss magnitude stays comparable
+    to the unweighted case -- normalising to sum=1 would shrink the
+    secondary CE term by roughly `n_classes`, silently changing how
+    much it contributes relative to the primary Lovász term's own
+    fixed weighting (`DrishtiSegLoss.ce_weight`).
+
+    Classes with ZERO pixels get weight 0, not an arbitrary large
+    number from 1/sqrt(0) -- classes 8/9 (NEGATIVE_OBSTACLE, OVERHANG)
+    NEVER appear in RELLIS-3D's remapped targets by taxonomy design
+    (perception/taxonomy.py), so their weight is moot for the CE
+    gradient either way, but a naive 1/sqrt(count) would divide by
+    zero here if not guarded.
+    """
+    counts = np.asarray(class_counts, dtype=np.float64)
+    weights = np.zeros(n_classes, dtype=np.float64)
+    nonzero = counts > 0
+    weights[nonzero] = 1.0 / np.sqrt(counts[nonzero])
+    mean_nonzero = weights[nonzero].mean() if np.any(nonzero) else 1.0
+    weights = weights / mean_nonzero  # mean of the NONZERO weights is 1, not the sum
+    return torch.tensor(weights, dtype=torch.float32)
 
 
 def compute_class_pixel_counts(items: list, sm: SensorConfig, n_classes: int, sample_every: int = 1):
@@ -193,7 +279,20 @@ def train(
     num_workers: int = 2,
     device: Optional[str] = None,
     max_stats_frames: int = 30,
+    init_from_checkpoint: Optional[str] = None,
+    use_class_weights: bool = True,
 ) -> None:
+    """`init_from_checkpoint`: load ONLY model weights from a prior
+    run's checkpoint (e.g. `checkpoints_multi/checkpoint_epoch19.pt`)
+    as a fine-tuning starting point -- fresh optimizer/scheduler/scaler
+    state, fresh epoch count. Distinct from the automatic `checkpoint.pt`
+    resume in `out_dir` (which restores FULL training state to survive
+    an interrupted job, per Ticket #30's own "Colab disconnects" Watch
+    out) -- this is for deliberately starting a NEW recipe (augmentation,
+    class weighting, a differently-sized LR schedule) from already-
+    converged features, not for resuming the SAME run. Only applied
+    when `out_dir` has no resumable checkpoint of its own yet (an
+    interrupted run of THIS recipe always takes priority)."""
     if batch_size < 2:
         # ASPP's global-average-pool branch (perception/segnet.py) collapses
         # spatial size to 1x1; with batch_size=1 that leaves exactly one
@@ -245,12 +344,19 @@ def train(
         print(f"WARNING: classes {zero_classes} have ZERO pixels in the sampled training data -- "
               f"they cannot learn anything and will report IoU=NaN. Check before burning GPU hours.")
 
-    train_ds = RellisSegDataset(train_items, sm, stats)
-    val_ds = RellisSegDataset(val_items, sm, stats)
+    train_ds = RellisSegDataset(train_items, sm, stats, is_train=True)
+    val_ds = RellisSegDataset(val_items, sm, stats, is_train=False)
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
     val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=num_workers)
 
     model = FusionSegNet(n_classes=N_CLASSES_DEFAULT).to(device)
+
+    ckpt_path = out_dir / "checkpoint.pt"
+    if init_from_checkpoint and not ckpt_path.exists():
+        init_ckpt = torch.load(init_from_checkpoint, map_location=device)
+        model.load_state_dict(init_ckpt["model_state"])
+        print(f"Initialised model weights from {init_from_checkpoint} (fresh optimizer/scheduler/epoch count)")
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     steps_per_epoch = max(1, len(train_loader))
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
@@ -265,9 +371,14 @@ def train(
         scaler = torch.amp.GradScaler(device if device != "cpu" else "cpu", enabled=(device == "cuda"))
     except AttributeError:
         scaler = torch.cuda.amp.GradScaler(enabled=(device == "cuda"))
-    loss_fn = DrishtiSegLoss()
 
-    ckpt_path = out_dir / "checkpoint.pt"
+    class_weight = compute_class_weights(class_counts, N_CLASSES_DEFAULT).to(device) if use_class_weights else None
+    if use_class_weights:
+        print("Class weights (secondary CE term only, mean-normalised inverse-sqrt-frequency):")
+        for c, w in enumerate(class_weight.tolist()):
+            print(f"  class {c}: {w:.3f}")
+    loss_fn = DrishtiSegLoss(class_weight=class_weight).to(device)
+
     start_epoch = load_checkpoint_if_exists(ckpt_path, model, optimizer, scheduler, scaler, device)
     if start_epoch > 0:
         print(f"Resuming from checkpoint at epoch {start_epoch}")
@@ -277,6 +388,13 @@ def train(
           f"({class_counts[majority_class] / max(1, class_counts.sum()):.1%} of sampled pixels)")
 
     epoch_durations = []
+    training_log_path = out_dir / "training_log.jsonl"
+    best_miou = -1.0
+    best_epoch = -1
+    train_loss_history: list[float] = []
+    val_loss_history: list[float] = []
+    OVERFIT_WINDOW = 3  # consecutive epochs of val-loss-up + train-loss-down before flagging
+
     for epoch in range(start_epoch, epochs):
         model.train()
         t0 = time.time()
@@ -311,28 +429,77 @@ def train(
 
         cm = np.zeros((N_CLASSES_DEFAULT, N_CLASSES_DEFAULT), dtype=np.int64)
         model.eval()
+        val_running_loss = 0.0
+        val_n_batches = 0
         with torch.no_grad():
             for x, target, valid in val_loader:
-                x = x.to(device)
+                x, target_d, valid_d = x.to(device), target.to(device), valid.to(device)
                 logits = model(x)
+                val_loss = loss_fn(logits, target_d, valid_d)
+                val_running_loss += val_loss.item()
+                val_n_batches += 1
                 pred = logits.argmax(dim=1).cpu().numpy()[0]
                 confusion_matrix_update(cm, pred, target.numpy()[0], valid.numpy()[0], N_CLASSES_DEFAULT)
 
+        val_loss_avg = val_running_loss / max(1, val_n_batches)
         ious = per_class_iou(cm)
         miou = float(np.nanmean(ious))
-        print(f"Epoch {epoch}: val mIoU={miou:.4f}")
+        current_lr = scheduler.get_last_lr()[0]
+        print(f"Epoch {epoch}: val loss={val_loss_avg:.4f} val mIoU={miou:.4f} lr={current_lr:.2e}")
         for c, iou in enumerate(ious):
             print(f"  class {c} IoU: {iou if not np.isnan(iou) else 'n/a (no pixels)'}")
+
+        # Overfitting signal: train loss falling while val loss RISES,
+        # for OVERFIT_WINDOW consecutive epochs -- a real divergence,
+        # not the single-epoch noise a naive "did it go up once" check
+        # would false-positive on.
+        train_loss_history.append(avg_loss)
+        val_loss_history.append(val_loss_avg)
+        overfitting = False
+        if len(val_loss_history) > OVERFIT_WINDOW:
+            recent_val = val_loss_history[-(OVERFIT_WINDOW + 1):]
+            recent_train = train_loss_history[-(OVERFIT_WINDOW + 1):]
+            val_rising = all(recent_val[i] < recent_val[i + 1] for i in range(len(recent_val) - 1))
+            train_falling = recent_train[0] > recent_train[-1]
+            overfitting = val_rising and train_falling
+        if overfitting:
+            print(f"  WARNING: val loss has risen for {OVERFIT_WINDOW} consecutive epochs while train loss fell -- likely overfitting")
+
+        is_best = miou > best_miou
+        if is_best:
+            best_miou = miou
+            best_epoch = epoch
+            save_checkpoint(out_dir / "best.pt", epoch, model, optimizer, scheduler, scaler)
+
+        with open(training_log_path, "a") as f:
+            f.write(json.dumps({
+                "epoch": epoch,
+                "train_loss": avg_loss,
+                "val_loss": val_loss_avg,
+                "val_miou": miou,
+                "per_class_iou": [None if np.isnan(v) else float(v) for v in ious],
+                "lr": current_lr,
+                "epoch_time_s": elapsed,
+                "is_best": is_best,
+                "best_epoch_so_far": best_epoch,
+                "best_miou_so_far": best_miou,
+                "overfitting_flag": overfitting,
+            }) + "\n")
 
         with open(out_dir / f"val_metrics_epoch{epoch}.json", "w") as f:
             json.dump(
                 {
                     "epoch": epoch,
+                    "train_loss": avg_loss,
+                    "val_loss": val_loss_avg,
                     "miou": miou,
                     "per_class_iou": [None if np.isnan(v) else float(v) for v in ious],
                     "train_set_size": len(train_items),
                     "val_set_size": len(val_items),
                     "majority_class_baseline_class": majority_class,
+                    "lr": current_lr,
+                    "epoch_time_s": elapsed,
+                    "overfitting_flag": overfitting,
                 },
                 f,
                 indent=2,
@@ -349,12 +516,26 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--num-workers", type=int, default=2)
     parser.add_argument("--device", default=None)
+    parser.add_argument(
+        "--init-from-checkpoint",
+        default=None,
+        help="Load ONLY model weights from a prior run's checkpoint as a fine-tuning start "
+             "(fresh optimizer/scheduler/epoch count) -- only takes effect if --out-dir has no "
+             "resumable checkpoint.pt of its own yet.",
+    )
+    parser.add_argument(
+        "--no-class-weights",
+        action="store_true",
+        help="Disable inverse-sqrt-frequency class weighting on the secondary CE term (on by default).",
+    )
     args = parser.parse_args()
 
     train(
         sequence_dir=args.sequence_dir,
         sensor_config_path=args.sensor_config,
         out_dir=args.out_dir,
+        init_from_checkpoint=args.init_from_checkpoint,
+        use_class_weights=not args.no_class_weights,
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
