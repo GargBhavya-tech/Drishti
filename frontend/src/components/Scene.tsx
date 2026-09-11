@@ -11,9 +11,12 @@ import { Line, OrbitControls } from "@react-three/drei"
 import { Canvas, useFrame } from "@react-three/fiber"
 import { useEffect, useMemo, useRef } from "react"
 import * as THREE from "three"
-import { foveaSampleGrid } from "../lib/foveaMath"
+import { findGazeTarget, foveaSampleGrid } from "../lib/foveaMath"
+import { gazeCandidatesFromFrame } from "../lib/mockData"
 import type { DemoFrame } from "../lib/mockData"
-import { costGridFromFrame, findPath } from "../lib/pathPlanner"
+import { classGridFromFrame, costGridFromFrame, findPath } from "../lib/pathPlanner"
+import { curvatureSpeedProfile, smoothPath } from "../lib/pathSmoothing"
+import type { GridPoint } from "../lib/pathSmoothing"
 import { CLASS_COLOR, OBSERVABILITY_COLOR } from "../lib/theme"
 import type { OverlayMode } from "../state/store"
 import { useDashboardStore } from "../state/store"
@@ -38,6 +41,16 @@ function heightRampColor(h: number, min: number, max: number): string {
   return HEIGHT_RAMP[idx]
 }
 
+// Attention overlay: a dark-to-bright heat ramp (Grad-CAM-style), driven
+// by CellSample.attentionScore -- SYNTHETIC in this mock-data demo (see
+// that field's own doc comment in mockData.ts), not a live model.
+const ATTENTION_RAMP = ["#0b0033", "#3b0f70", "#8c2981", "#de4968", "#fe9f6d", "#fcfdbf"]
+
+function attentionRampColor(score: number): string {
+  const idx = Math.min(ATTENTION_RAMP.length - 1, Math.max(0, Math.floor(score * ATTENTION_RAMP.length)))
+  return ATTENTION_RAMP[idx]
+}
+
 function colorForCell(cell: DemoFrame["cells"][number], mode: OverlayMode, hMin: number, hMax: number): THREE.Color {
   switch (mode) {
     case "observability":
@@ -48,6 +61,8 @@ function colorForCell(cell: DemoFrame["cells"][number], mode: OverlayMode, hMin:
       return new THREE.Color(heightRampColor(cell.heightM, hMin, hMax))
     case "motion":
       return new THREE.Color(cell.isMoving ? "#ff5c5c" : "#1b2735")
+    case "attention":
+      return new THREE.Color(attentionRampColor(cell.attentionScore))
     case "class":
     default:
       return new THREE.Color(CLASS_COLOR[cell.classId] ?? "#5b6472")
@@ -174,39 +189,123 @@ const PATH_GOAL: [number, number] = [PATH_GRID_HALF + 30, PATH_GRID_HALF + 17] /
 // across the pedestrian's own j-range (14-20, see mockData.ts's pedestrianPositionAt), so the
 // direct route genuinely crosses the moving hazard's path at some point in the sequence.
 
-/** Ticket #49's real planner interface, made visible: an A* route
- * (planning/path_planner.py, ported to TS in pathPlanner.ts) recomputed
- * EVERY frame from the CURRENT cost grid -- so the line drawn here
- * visibly bends around the moving pedestrian and any static hazards,
- * not a scripted animation. Bible Part 14's own framing: "a path
- * re-routing around a pedestrian shows CONSEQUENCE." */
+// Perceptual cap for the path's speed-limit colour ramp: green means
+// "no worse than the ~43km/h dry-hazard baseline SpeedGauge's own gauge
+// tops out near," red means the kinodynamic governor has cut speed
+// hard. Not a real vehicle limit by itself -- just this colour ramp's
+// own reference point, kept in one place.
+const SPEED_COLOR_CAP_MS = 12
+
+function speedLimitColor(vMs: number): THREE.Color {
+  const t = Number.isFinite(vMs) ? Math.min(1, Math.max(0, vMs / SPEED_COLOR_CAP_MS)) : 1
+  return new THREE.Color().lerpColors(new THREE.Color("#e0342c"), new THREE.Color("#4fe0a0"), t)
+}
+
+/** Ticket #49's real planner interface, made visible AND made
+ * kinodynamically honest: an A* route (planning/path_planner.py)
+ * recomputed EVERY frame from the CURRENT cost grid, then smoothed
+ * with a Catmull-Rom curve (planning/path_smoothing.py, ported to
+ * pathSmoothing.ts) so it no longer shows the raw grid's artificial
+ * 45-degree kinks, and coloured along its length by the SAME module's
+ * friction-and-curvature-limited cornering speed (green = fast, red =
+ * "the governor is slowing down for this stretch") -- Bible Part 14's
+ * own framing ("a path re-routing around a pedestrian shows
+ * CONSEQUENCE") extended to show WHY the speed varies along the route,
+ * not just where the route goes. */
 function PlannedPath({ frame }: { frame: DemoFrame }) {
-  const result = useMemo(() => {
+  const pathResult = useMemo(() => {
     const { grid, size } = costGridFromFrame(frame, PATH_GRID_HALF)
-    return findPath(grid, size, size, PATH_START, PATH_GOAL)
+    return { result: findPath(grid, size, size, PATH_START, PATH_GOAL), size }
   }, [frame])
 
-  const points = useMemo(() => {
-    if (!result.path) return []
-    return result.path.map(([r, c]) => {
-      const i = r - PATH_GRID_HALF
-      const j = c - PATH_GRID_HALF
-      return new THREE.Vector3(i * CELL_WORLD_SIZE, 0.18, j * CELL_WORLD_SIZE)
-    })
-  }, [result])
+  const { curvePoints, curveColors } = useMemo(() => {
+    const { result, size } = pathResult
+    if (!result.path || result.path.length < 2) {
+      return { curvePoints: [] as THREE.Vector3[], curveColors: [] as THREE.Color[] }
+    }
 
-  if (points.length < 2) return null
+    const { classGrid } = classGridFromFrame(frame, PATH_GRID_HALF)
+    const smoothed = smoothPath(result.path as GridPoint[])
+    const classAt = (p: GridPoint): number => {
+      const r = Math.round(Math.max(0, Math.min(size - 1, p[0])))
+      const c = Math.round(Math.max(0, Math.min(size - 1, p[1])))
+      return classGrid[r * size + c]
+    }
+    // cellSizeM=1.0 -- this demo's own established convention (see
+    // Scene.tsx's FoveaOverlay/foveaSampleGrid): one grid-index unit is
+    // treated as one metre for every physics formula here, with
+    // CELL_WORLD_SIZE applied ONLY at the final Three.js world-position
+    // step below, identically for every other renderer in this file.
+    const profile = curvatureSpeedProfile(smoothed, 1.0, classAt)
+
+    const toWorld = ([r, c]: GridPoint) =>
+      new THREE.Vector3((r - PATH_GRID_HALF) * CELL_WORLD_SIZE, 0.18, (c - PATH_GRID_HALF) * CELL_WORLD_SIZE)
+
+    const curvePoints = smoothed.map(toWorld)
+    const curveColors = smoothed.map((_, idx) => {
+      // profile[] covers only the curve's interior points (indices
+      // 1..N-2 of `smoothed`); endpoints borrow their nearest interior
+      // sample. An empty profile (path too short to have curvature)
+      // defaults to "no limit" green rather than an arbitrary colour.
+      if (profile.length === 0) return speedLimitColor(Infinity)
+      const profileIdx = Math.min(profile.length - 1, Math.max(0, idx - 1))
+      return speedLimitColor(profile[profileIdx].vMaxMs)
+    })
+
+    return { curvePoints, curveColors }
+  }, [frame, pathResult])
+
+  if (curvePoints.length < 2) return null
 
   return (
     <>
-      <Line points={points} color="#4fe0a0" lineWidth={3} />
-      <mesh position={points[0]}>
+      <Line points={curvePoints} vertexColors={curveColors} lineWidth={3} />
+      <mesh position={curvePoints[0]}>
         <sphereGeometry args={[0.12, 12, 12]} />
         <meshBasicMaterial color="#4fd1ff" />
       </mesh>
-      <mesh position={points[points.length - 1]}>
+      <mesh position={curvePoints[curvePoints.length - 1]}>
         <sphereGeometry args={[0.12, 12, 12]} />
         <meshBasicMaterial color="#4fe0a0" />
+      </mesh>
+    </>
+  )
+}
+
+const GAZE_URGENCY_THRESHOLD_S = 6 // don't saccade onto a hazard many seconds away -- urgency IS time-to-contact
+
+/** Saccadic gaze steering, made visible: attention/fovea_controller.py's
+ * find_gaze_target() (ported to foveaMath.ts) picks the single most
+ * urgent (soonest-TTC) candidate hazard cell each frame -- a beam and a
+ * pulsing ring lock onto it, dramatising "look where you'll be soon,"
+ * Bible Part 13's own framing, rather than the always-dead-ahead gaze a
+ * typical demo defaults to. */
+function GazeBeam({ frame }: { frame: DemoFrame }) {
+  const egoSpeedMs = useDashboardStore((s) => s.egoSpeedMs)
+  const ringRef = useRef<THREE.Mesh>(null)
+
+  const target = useMemo(() => {
+    const candidates = gazeCandidatesFromFrame(frame)
+    return findGazeTarget(candidates, { x: egoSpeedMs, y: 0 })
+  }, [frame, egoSpeedMs])
+
+  useFrame((state) => {
+    if (!ringRef.current) return
+    const pulse = 1 + 0.18 * Math.sin(state.clock.elapsedTime * 4)
+    ringRef.current.scale.setScalar(pulse)
+  })
+
+  if (!target || target.ttcS > GAZE_URGENCY_THRESHOLD_S) return null
+
+  const origin = new THREE.Vector3(0, 0.05, 0)
+  const targetWorld = new THREE.Vector3(target.point.x * CELL_WORLD_SIZE, 0.05, target.point.y * CELL_WORLD_SIZE)
+
+  return (
+    <>
+      <Line points={[origin, targetWorld]} color="#ffe27a" lineWidth={1.5} transparent opacity={0.75} />
+      <mesh ref={ringRef} position={targetWorld} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.16, 0.22, 24]} />
+        <meshBasicMaterial color="#ffe27a" transparent opacity={0.85} side={THREE.DoubleSide} />
       </mesh>
     </>
   )
@@ -248,6 +347,7 @@ export function Scene({ frame }: { frame: DemoFrame }) {
       <CellField frame={frame} />
       <FoveaOverlay />
       <PlannedPath frame={frame} />
+      <GazeBeam frame={frame} />
       <Rig />
       <OrbitControls
         enableDamping

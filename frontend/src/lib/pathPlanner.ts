@@ -134,3 +134,22 @@ export function costGridFromFrame(frame: DemoFrame, half: number): { grid: Float
   }
   return { grid, size }
 }
+
+/** The SAME dense grid costGridFromFrame builds, but of raw DRISHTI
+ * class ids (UNKNOWN=0 for a cell with no data this frame) rather than
+ * cost -- used by the kinodynamic path-smoothing pass to look up "what
+ * terrain is under this point on the curve" at the SAME indexing
+ * costGridFromFrame already established, so both consumers agree on
+ * cell (row, col) <-> (i, j) mapping by construction, not by
+ * convention two functions have to independently get right. */
+export function classGridFromFrame(frame: DemoFrame, half: number): { classGrid: Int16Array; size: number } {
+  const size = half * 2 + 1
+  const classGrid = new Int16Array(size * size).fill(0) // 0 = UNKNOWN
+  for (const cell of frame.cells) {
+    const r = cell.i + half
+    const c = cell.j + half
+    if (r < 0 || r >= size || c < 0 || c >= size) continue
+    classGrid[r * size + c] = cell.classId
+  }
+  return { classGrid, size }
+}

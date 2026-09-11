@@ -22,7 +22,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from attention.fovea_controller import c_range, c_ttc, fovea_cell_size, ttc_s, v_close
+from attention.fovea_controller import c_range, c_ttc, find_gaze_target, fovea_cell_size, ttc_s, v_close
 from sensor.sensor_model import load_sensor_config
 
 CONFIGS = Path(__file__).resolve().parents[1] / "configs"
@@ -154,3 +154,43 @@ def test_profile_a_is_c_range_alone_regardless_of_velocity(hdl64e):
 def test_unknown_profile_raises(hdl64e):
     with pytest.raises(ValueError):
         fovea_cell_size((10.0, 0.0), (0.0, 0.0), hdl64e, profile="C")
+
+
+# ---------------------------------------------------------------------------
+# Saccadic gaze steering: find_gaze_target's argmin-TTC reduction.
+# ---------------------------------------------------------------------------
+
+
+def test_find_gaze_target_empty_candidates_returns_none():
+    assert find_gaze_target([], v=(15.0, 0.0)) is None
+
+
+def test_find_gaze_target_picks_the_soonest_ttc_candidate():
+    v = (15.0, 0.0)
+    near_ahead = (10.0, 0.0)   # TTC = 10/15 ~ 0.667s -- most urgent
+    far_ahead = (80.0, 0.0)    # TTC = 80/15 ~ 5.33s
+    lateral = (0.0, 5.0)       # v_close <= 0 -> floored TTC = 5/2 = 2.5s
+    target = find_gaze_target([far_ahead, lateral, near_ahead], v)
+    assert target is not None
+    assert target.point == near_ahead
+    assert target.ttc_s == pytest.approx(10.0 / 15.0)
+
+
+def test_find_gaze_target_single_candidate_is_always_the_target():
+    v = (15.0, 0.0)
+    only = (42.0, 3.0)
+    target = find_gaze_target([only], v)
+    assert target is not None
+    assert target.point == only
+
+
+def test_find_gaze_target_urgency_matches_ttc_s_directly():
+    # The chosen target's own ttc_s must equal ttc_s() computed
+    # independently on the same point/velocity -- no hidden second
+    # urgency metric snuck in.
+    v = (12.0, 4.0)
+    p = (30.0, -6.0)
+    target = find_gaze_target([p], v)
+    assert target is not None
+    assert target.ttc_s == pytest.approx(ttc_s(v, p))
+    assert target.c_ttc_m == pytest.approx(c_ttc(v, p))

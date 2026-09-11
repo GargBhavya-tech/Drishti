@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional, Sequence, Tuple
 
 from grid.clipmap import Clipmap
 from sensor.schedule import generate_schedule
@@ -161,3 +161,47 @@ def fovea_cell_size(
     ttc_term = c_ttc(v, p, gamma=params.gamma, tau0=params.tau0_s, c0=params.c0, v_min=params.v_min_ms)
     boundary_term = c_boundary(p, cm, boundary_level)
     return min(floor, ttc_term, boundary_term)
+
+
+@dataclass(frozen=True)
+class GazeTarget:
+    point: Point2D
+    ttc_s: float
+    c_ttc_m: float
+
+
+def find_gaze_target(
+    candidates: Sequence[Point2D],
+    v: Point2D,
+    gamma: float = DEFAULT_GAMMA,
+    tau0: float = TAU0_S,
+    c0: float = DEFAULT_C0_M,
+    v_min: float = V_MIN_MS,
+) -> Optional[GazeTarget]:
+    """Saccadic gaze steering. `c_ttc` above already answers "how fine
+    must resolution be HERE," per point, on demand -- a saccade needs
+    the complementary question: "which ONE point, among several
+    plausible hazards, is most urgent RIGHT NOW." Urgency here is the
+    SAME `ttc_s` the resolution schedule already computes (a lower TTC
+    is a sooner, more urgent point), so this is not a new metric, just
+    a new REDUCTION (argmin) over an existing one -- the fovea's
+    required-resolution term and the gaze beam's chosen target answer
+    two different questions about the same underlying "how soon"
+    quantity, they do not duplicate it.
+
+    `candidates` is caller-supplied (e.g. the range-shadow "SUSPECT"
+    cells `observability.negative_obstacle` flags, or any tracked
+    entity's position) -- this function has no opinion on WHERE
+    candidates come from, only on which one is currently most urgent.
+    Returns `None` for an empty candidate list: no candidate hazards
+    means no saccade target, never a fabricated one at the origin.
+    """
+    if not candidates:
+        return None
+    best: Optional[GazeTarget] = None
+    for p in candidates:
+        t = ttc_s(v, p, v_min=v_min)
+        if best is None or t < best.ttc_s:
+            c = c_ttc(v, p, gamma=gamma, tau0=tau0, c0=c0, v_min=v_min)
+            best = GazeTarget(point=p, ttc_s=t, c_ttc_m=c)
+    return best

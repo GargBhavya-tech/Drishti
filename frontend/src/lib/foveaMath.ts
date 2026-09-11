@@ -77,6 +77,42 @@ export const foveaCellSize = (
   return Math.min(floor, ttcTerm)
 }
 
+export interface GazeTarget {
+  point: Point2D
+  ttcS: number
+  cTtcM: number
+}
+
+/** Saccadic gaze steering -- a direct port of
+ * attention/fovea_controller.py's find_gaze_target(). cTtc above
+ * already answers "how fine must resolution be HERE," per point; a
+ * saccade needs the complementary question -- "which ONE point, among
+ * several plausible hazards, is most urgent RIGHT NOW." Urgency here
+ * is the SAME ttcSeconds the resolution schedule already computes
+ * (lower TTC = sooner = more urgent), so this is a new REDUCTION
+ * (argmin) over an existing metric, not a new one. Empty candidates
+ * returns null -- no candidate hazards means no saccade target, never
+ * a fabricated one at the origin. */
+export const findGazeTarget = (
+  candidates: Point2D[],
+  v: Point2D,
+  gamma = DEFAULT_GAMMA,
+  tau0 = TAU0_S,
+  c0 = DEFAULT_C0_M,
+  vMin = V_MIN_MS,
+): GazeTarget | null => {
+  if (candidates.length === 0) return null
+  let best: GazeTarget | null = null
+  for (const p of candidates) {
+    const t = ttcSeconds(v, p, vMin)
+    if (best === null || t < best.ttcS) {
+      const c = cTtc(v, p, gamma, tau0, c0, vMin)
+      best = { point: p, ttcS: t, cTtcM: c }
+    }
+  }
+  return best
+}
+
 /** A full sample grid of cell sizes for a given gamma/velocity, used to
  * drive the live 3D foveation preview -- mirrors eval/pareto.py's own
  * sample-grid pattern (evenly spaced points over a square extent). */

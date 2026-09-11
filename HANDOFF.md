@@ -49,7 +49,19 @@ Every new/changed Python module got its own passing test run at the time it was 
 5. **Stretch tickets #66/#67** (sparsity recovery rate vs. predicted N_exp curve; outdriving fraction) — not yet built.
 6. Phase 9's non-code deliverables (slides, demo video) — everything built so far only matters once it lands in the actual pitch.
 
-### 0e. Everything below this point (sections 1-9) is SESSION 2's own handoff, covering Phases 0-4 in detail — still accurate for that scope, just stale on "what's done" (see the correction at the top of this file).
+### 0e. SESSION 3 ADDENDUM -- five more differentiator features, built same session
+
+After the four items in 0a-6, the user asked for a critical assessment of five more judge-facing ideas, then "do everything." All five are built, backend-tested, and frontend-typechecked/built clean (`npx tsc -b --noEmit` and `npm run build` both exit 0; manual browser check of the running dev server showed no console errors across overlay-mode switching, the smoothed path, and the attention heatmap):
+
+1. **Semantic Friction Governor** -- `planning/friction.py` (+`tests/test_friction.py`, 12 tests) derates `speed_envelope`'s braking `a_max` per-DRISHTI-class (`CLASS_TO_MU`: DRIVABLE 0.80, VEGETATION 0.45, CAUTION 0.35 dry-reference-relative), reusing `perception.taxonomy.DrishtiClass`. **Honesty caveat baked into the module docstring**: DRISHTI's 10-class taxonomy already merges mud/puddle/grass/sand into 3 drivable tiers (Ticket #8) -- this cannot claim finer per-material friction than that. TS port: `frontend/src/lib/frictionMath.ts`.
+2. **Saccadic Gaze Steering** -- `attention/fovea_controller.py` gained `find_gaze_target()` (argmin-TTC over candidate hazard points; +4 tests in `tests/test_fovea_controller.py`). TS port in `foveaMath.ts`; `Scene.tsx`'s new `GazeBeam` component draws a beam+pulsing ring onto the most urgent PEDESTRIAN/NEGATIVE_OBSTACLE cell (only shown when TTC <= 6s).
+3. **Explainability toggle** -- new `"attention"` overlay mode (`store.ts`, `HUD.tsx`, `Scene.tsx`'s `attentionRampColor`). Frontend uses a `CellSample.attentionScore` field in `mockData.ts` that is **explicitly labeled SYNTHETIC** (boundary + hazard-class heuristic, methodologically consistent with what a real attention gate learns, but NOT a real model output) -- the UI label itself says "(synthetic demo)". The REAL backend proof (`perception/segnet.py`'s `return_attention=True`, `eval/checkpoint_attention_overlay.py`) still has not been run on the remote GPU -- unchanged open item from 0b/0d.
+4. **Kinodynamic path smoothing** -- `planning/path_smoothing.py` (+`tests/test_path_smoothing.py`, 12 tests): Catmull-Rom spline through A*'s waypoints (deliberately NOT a true Dubins curve -- see module docstring for the tradeoff) + circumradius curvature estimate + `v_max(R) = sqrt(mu*g*R)` reusing `planning.friction`'s own mu table. TS port `pathSmoothing.ts`; `Scene.tsx`'s `PlannedPath` now renders the smoothed curve colour-coded green-to-red by this combined friction+curvature speed limit, and a new `GovernorPanel.tsx` (wired into `App.tsx`'s sidebar) reports the binding mu/class and tightest-corner speed in text.
+5. **ROS 2 bridge** -- `ros2_bridge/drishti_bridge.py` (+`tests/test_ros2_bridge.py`, 5 tests). **Explicitly labeled an untested architecture skeleton** in its own module-level docstring -- no ROS 2/rclpy is installed in this dev environment, `_on_pointcloud` raises `NotImplementedError` with a docstring sketch of the real pipeline it would call rather than silently no-op'ing. Do not present this to judges as a tested integration.
+
+All new Python tests pass (40/40 across the four new/changed test files, verified in one run). Nothing in this addendum has been wired into a real ROS 2 environment or a real GPU attention-overlay run -- those remain exactly the open items 0b/0d already listed.
+
+### 0f. Everything below this point (sections 1-9) is SESSION 2's own handoff, covering Phases 0-4 in detail — still accurate for that scope, just stale on "what's done" (see the correction at the top of this file).
 
 ---
 

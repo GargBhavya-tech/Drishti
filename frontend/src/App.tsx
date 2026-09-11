@@ -7,6 +7,7 @@
 import { AnimatePresence, motion } from "motion/react"
 import { CompareWipeToggle, GammaSlider, SplitScreenToggle, Timeline } from "./components/Controls"
 import { ComparisonWipe } from "./components/ComparisonWipe"
+import { GovernorPanel } from "./components/GovernorPanel"
 import { HUD } from "./components/HUD"
 import { Scene } from "./components/Scene"
 import { SpeedGauge } from "./components/SpeedGauge"
@@ -81,6 +82,7 @@ export default function App() {
         <div className="w-72 shrink-0 border-l border-white/8 bg-black/20 p-3 overflow-y-auto flex flex-col gap-3">
           <HUD hud={frame.hud} frameIndex={frameIndex} frameCount={DEMO_SEQUENCE.length} />
           <SpeedGauge envelope={frame.speedEnvelope} />
+          <GovernorPanel frame={frame} />
         </div>
       </div>
 

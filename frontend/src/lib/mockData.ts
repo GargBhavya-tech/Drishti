@@ -20,6 +20,19 @@ export interface CellSample {
   observability: Observability
   sparsityVerdict: SparsityVerdict
   isMoving: boolean
+  /** SYNTHETIC attention-proxy in [0, 1], NOT a real trained
+   * attention-gate activation -- this demo sequence has no real
+   * DRISHTI backend run behind it (see the app header's own "synthetic,
+   * frontend-only" note). Computed to be METHODOLOGICALLY consistent
+   * with what perception/segnet.py's AttentionGate is documented to
+   * learn (return_attention=True, Ticket "Interactive Neural
+   * Explainability"): real attention gates activate on class-boundary
+   * edges and salient hazard classes, not uniform interior terrain --
+   * see attentionScoreFor() below for exactly how that's approximated
+   * here. A real per-frame export (eval/checkpoint_attention_overlay.py,
+   * run on a real checkpoint on the remote GPU) is the genuine article;
+   * this field is its honestly-labelled stand-in for the live demo. */
+  attentionScore: number
 }
 
 export interface HudStats {
@@ -75,6 +88,30 @@ function baseClassFor(i: number, j: number): DrishtiClassId {
   return 1 // DRIVABLE
 }
 
+// See CellSample.attentionScore's own doc comment: SYNTHETIC, not a
+// real trained activation. Real attention gates (perception/segnet.py's
+// AttentionGate) are documented to activate on class-boundary edges and
+// salient/hazard classes, not uniform interior terrain -- this
+// approximates exactly that shape: a hazard-class base score, boosted
+// wherever the (i,j) cell's base class differs from a 4-connected
+// neighbour's, boosted further for the moving pedestrian cell.
+const ATTENTION_HAZARD_BASE: Record<number, number> = {
+  4: 0.55, // STATIC_OBSTACLE
+  6: 0.65, // VEHICLE
+  7: 0.85, // PEDESTRIAN
+  8: 0.95, // NEGATIVE_OBSTACLE -- the highest base score, matching Bible's own "the network should focus hardest on the hazard it's proving negative about"
+  9: 0.5,  // OVERHANG
+}
+
+function attentionScoreFor(i: number, j: number, classId: DrishtiClassId, isMoving: boolean): number {
+  let score = ATTENTION_HAZARD_BASE[classId] ?? 0.08
+  const here = baseClassFor(i, j)
+  const neighborClasses = [baseClassFor(i + 1, j), baseClassFor(i - 1, j), baseClassFor(i, j + 1), baseClassFor(i, j - 1)]
+  if (neighborClasses.some((n) => n !== here)) score = Math.max(score, 0.5) // a class boundary IS the kerb/verge/drop-off
+  if (isMoving) score = Math.max(score, 0.9)
+  return Math.min(1, score + rand() * 0.04) // small texture noise, not decoration -- avoids a flat-looking heatmap
+}
+
 function sparsityFor(rangeCells: number): SparsityVerdict {
   if (rangeCells > 30) return rand() > 0.4 ? "UNKNOWN" : "SPARSE_STRUCTURED"
   if (rangeCells > 22) return rand() > 0.75 ? "SPARSE_STRUCTURED" : "NORMAL"
@@ -121,6 +158,7 @@ export function generateSequence(nFrames = 48): DemoFrame[] {
           observability,
           sparsityVerdict: sparsityFor(rangeCells),
           isMoving: isPedestrianCell,
+          attentionScore: attentionScoreFor(i, j, classId, isPedestrianCell),
         })
       }
     }
@@ -171,6 +209,21 @@ export function generateFlattenedVariant(frame: DemoFrame): DemoFrame {
   }
 }
 
+/** Candidate saccade targets for foveaMath.ts's findGazeTarget():
+ * every PEDESTRIAN or NEGATIVE_OBSTACLE cell this frame, in the SAME
+ * numeric (i, j) convention foveaSampleGrid already uses as "metres"
+ * (see Scene.tsx's own FoveaOverlay -- this codebase treats one grid
+ * index unit as one metre for the physics formulas, reserving
+ * CELL_WORLD_SIZE purely for 3D-scene scaling). Both hazard classes
+ * are structural/geometry-derived per perception/taxonomy.py (never
+ * invented from a semantic label), so a saccade locking onto one is a
+ * real uncertainty-resolution behaviour, not decoration. */
+export function gazeCandidatesFromFrame(frame: DemoFrame): { x: number; y: number }[] {
+  return frame.cells
+    .filter((c) => c.classId === 7 || c.classId === 8)
+    .map((c) => ({ x: c.i, y: c.j }))
+}
+
 let _denseBaseline: DemoFrame | null = null
 export function generateDenseBaselineFrame(): DemoFrame {
   if (_denseBaseline) return _denseBaseline
@@ -185,6 +238,7 @@ export function generateDenseBaselineFrame(): DemoFrame {
         observability: "OCCUPIED",
         sparsityVerdict: "NORMAL",
         isMoving: false,
+        attentionScore: attentionScoreFor(i, j, baseClassFor(i, j), false),
       })
     }
   }

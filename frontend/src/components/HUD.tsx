@@ -50,6 +50,7 @@ const OVERLAY_OPTIONS: { id: OverlayMode; label: string }[] = [
   { id: "sparsity", label: "Sparsity verdict" },
   { id: "height", label: "Height ramp" },
   { id: "motion", label: "Motion cells" },
+  { id: "attention", label: "Attention / XAI (synthetic demo)" },
 ]
 
 function OverlayToggle({ id, label }: { id: OverlayMode; label: string }) {

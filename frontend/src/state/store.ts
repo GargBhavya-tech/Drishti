@@ -7,7 +7,7 @@
 import { create } from "zustand"
 import { DEMO_SEQUENCE } from "../lib/mockData"
 
-export type OverlayMode = "class" | "observability" | "sparsity" | "height" | "motion"
+export type OverlayMode = "class" | "observability" | "sparsity" | "height" | "motion" | "attention"
 
 interface DashboardState {
   frameIndex: number
