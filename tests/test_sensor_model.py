@@ -62,8 +62,9 @@ def test_n_expected_falls_as_inverse_square(hdl64e):
 
 
 def test_r_max_ditch_requires_h(tmp_path):
-    """h_m: null (as in the Ouster placeholder config) must raise, not
-    silently compute a wrong number with h=None or h=0."""
+    """h_m: null must raise, not silently compute a wrong number with
+    h=None or h=0 -- exercised here against a synthetic no-h config,
+    independent of whatever configs/sensor_*.yaml currently ship."""
     no_h = tmp_path / "sensor_no_h.yaml"
     no_h.write_text(
         "sensor_id: no_h\nn_beams: 64\n"
@@ -74,11 +75,27 @@ def test_r_max_ditch_requires_h(tmp_path):
         r_max_ditch(2.0, sm)
 
 
-def test_ouster_placeholder_config_loads_but_is_flagged():
-    """The Ouster config is expected to load (Ticket #4 doesn't block on
-    Ticket #6 having run) but its h_m is None, so anything needing h must
-    still fail per test_r_max_ditch_requires_h above -- this test just
-    confirms the config itself is well-formed enough to load."""
+def test_ouster_config_now_measured_not_a_placeholder():
+    """Ticket #6, completed for this sensor (eval/measure_ouster_config.py,
+    against real local RELLIS-3D data): the Ouster config used to load
+    with h_m=None (a placeholder) -- it now carries real measured values
+    for d_theta_rad, d_phi_rad, phi_max_rad and h_m, so anything needing
+    h (r_max_ditch, s_radial_ground, ...) now works against it rather
+    than raising."""
     sm = load_sensor_config(CONFIGS / "sensor_ouster_os1_64.yaml")
     assert sm.sensor_id == "ouster_os1_64"
-    assert sm.h_m is None
+    assert sm.h_m is not None
+    assert 0.5 < sm.h_m < 2.0  # a plausible UGV-mounted-sensor height, not a sentinel
+
+    # d_theta measured as 360/2048 deg/column (a firmware raster fact,
+    # confirmed by direct point-count division against real data) --
+    # NOT the old placeholder's 360/1024.
+    assert sm.d_theta_rad == pytest.approx(2 * math.pi / 2048, rel=1e-6)
+
+    # d_phi and phi_max are real measured beam-table values now, not the
+    # placeholder's spec-sheet guess (45 deg / 63, phi_max=22.5).
+    assert sm.d_phi_rad != pytest.approx(0.71 * math.pi / 180, rel=0.05)
+    assert sm.phi_max_rad != pytest.approx(22.5 * math.pi / 180, rel=0.05)
+
+    # With h_m now set, formulas that used to require it no longer raise.
+    assert r_max_ditch(2.0, sm) > 0

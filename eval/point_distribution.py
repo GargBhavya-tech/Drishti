@@ -22,13 +22,18 @@ of the wrong quantity. Also: the between-ring measurement is only valid
 on near-flat ground; on a slope or near an object, s_radial_ground's
 derivation doesn't hold.
 
-Ground-flatness proxy note: Ticket #26 (the real ground-prior classifier)
-is not built yet, and this ticket is blocked only by #2/#4, not #26. So
-`_flat_ground_mask` below uses a crude z-band heuristic as a stand-in --
-good enough to validate the estimator's logic against synthetic data now,
-but SHOULD be swapped for the real ground prior once #26 lands, since a
-z-band heuristic will include non-ground points on any real, non-trivial
-scene and bias the between-ring measurement.
+Ground-flatness mask: FIXED to use the real ground-prior classifier
+(Ticket #26, `perception.ground_prior.compute_ground_prior`) now that it
+exists. This module originally shipped a crude 5th-percentile-z-band
+heuristic as a stand-in, explicitly noted here as something that "SHOULD
+be swapped for the real ground prior once #26 lands, since a z-band
+heuristic will include non-ground points on any real, non-trivial
+scene" -- #26 has since landed (Phase 3), so this now uses the same
+column-wise incremental walk the rest of the pipeline uses, rather than
+a percentile guess. This matters specifically for RELLIS-3D's genuinely
+undulating off-road terrain, where a percentile band absorbs real slope
+and low vegetation into "probably ground" and biases the between-ring
+measurement toward garbage.
 """
 
 from __future__ import annotations
@@ -39,10 +44,12 @@ from typing import Optional
 
 import numpy as np
 
+from perception.ground_prior import compute_ground_prior
 from perception.sweep import Sweep
 from sensor.sensor_model import SensorConfig, s_tangential, s_radial_ground
 
 RANGE_BIN_EDGES_M = np.arange(0, 75, 5)  # 5m bins to 70m
+DEFAULT_GROUND_PRIOR_AZIMUTH_BINS = 1080  # matches other call sites' default (e.g. observability/ground_plane.py)
 
 
 @dataclass
@@ -61,16 +68,16 @@ def _range_of(xyz: np.ndarray) -> np.ndarray:
     return np.linalg.norm(xyz[:, :2], axis=1)  # ground-plane range, matches Bible's r
 
 
-def _flat_ground_mask(sweep: Sweep, z_band_m: float = 0.15) -> np.ndarray:
-    """Crude stand-in for Ticket #26's real ground classifier -- see
-    module docstring. Keeps points whose z sits within z_band_m of the
-    5th percentile z (a cheap proxy for 'near the lowest surface, i.e.
-    probably ground')."""
+def _flat_ground_mask(sweep: Sweep, n_azimuth_bins: int = DEFAULT_GROUND_PRIOR_AZIMUTH_BINS) -> np.ndarray:
+    """The real ground classifier (Ticket #26's column-wise incremental
+    walk), not a percentile guess -- see module docstring. Tracks actual
+    terrain slope column by column instead of assuming "near the lowest
+    surface", so it stays correct on RELLIS-3D's genuinely undulating
+    off-road ground rather than silently absorbing slope and low
+    vegetation into "probably ground" the way a z-band heuristic would."""
     if sweep.xyz.shape[0] == 0:
         return np.zeros((0,), dtype=bool)
-    z = sweep.xyz[:, 2]
-    floor = np.percentile(z, 5)
-    return np.abs(z - floor) <= z_band_m
+    return compute_ground_prior(sweep, n_azimuth_bins=n_azimuth_bins).is_ground
 
 
 def measure_within_ring_spacing(sweep: Sweep) -> dict:

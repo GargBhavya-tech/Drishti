@@ -1,41 +1,81 @@
 # Ouster OS1-64 — RELLIS-3D's primary sensor (Ticket #3).
 #
-# UNVERIFIED. d_theta_rad and d_phi_rad below are PLACEHOLDERS, not
-# datasheet-confirmed numbers — no source consulted while building this
-# repo could confirm them. Do not trust any number computed from this
-# config (schedule radii, r_blind, safe speeds, ...) until Ticket #6
-# (point-distribution gate) has been re-run against real RELLIS-3D scans,
-# which is what actually measures d_theta/d_phi from the data itself.
-# See DRISHTI_Build_Map.md, Ticket #3 and Ticket #6, for why measuring
-# beats assuming here.
+# MEASURED from real RELLIS-3D data (2026-09-11), via
+# `eval/measure_ouster_config.py` — Ticket #6, completed for this sensor.
+# Method, per field, below. Re-run that script to reproduce or refresh
+# these numbers against more/different data; do not hand-edit them
+# without updating the script's own sampling too, or the two will drift.
+#
+# d_theta_rad and phi_max/d_phi_rad were previously PLACEHOLDERS (an
+# assumed 1024-columns/rev firmware setting and a spec-sheet FOV guess).
+# Both turned out to be wrong: real RELLIS-3D Ouster frames are 2048
+# columns/rev (2x the placeholder), and the real vertical FOV is
+# +17.0/-16.4 deg (a 33.5 deg span), not the +-22.5 deg (45 deg) assumed.
+#
+# The point-distribution gate itself (within/between-ring measured vs
+# predicted spacing) does NOT cleanly validate on this dataset the way
+# it does on flat urban scenes — see eval/measure_ouster_config.py's
+# module docstring for the diagnosed reason (off-road terrain
+# decorrelates a ring's return range from azimuth, which the gate's
+# range-then-ring binning assumes doesn't happen). The numbers below are
+# NOT derived from that comparison; they are measured independently
+# (direct point-count/beam-position arithmetic, cross-checked to ~1e-6
+# degree agreement across all 5 sequences) and are trustworthy despite
+# the gate plot itself looking noisy on this terrain.
 
 sensor_id: ouster_os1_64
 
 n_beams: 64
 
-# TODO: measure via Ticket #6. Ouster's azimuth resolution is a firmware
-# setting (512/1024/2048 columns/rev are common), not a fixed datasheet
-# constant the way Velodyne's is — this placeholder assumes 1024 columns/rev,
-# i.e. 360/1024 deg, and MUST be confirmed against the actual RELLIS-3D
-# capture settings before use.
-d_theta_deg: 0.3516           # placeholder: 360/1024
-d_theta_rad: 0.006136923151878959
+# MEASURED: every real frame checked across all 5 sequences has exactly
+# 131,072 = 2048 x 64 points (a fixed firmware raster, confirmed by
+# direct division, not statistically estimated) -> 360/2048 deg/column.
+d_theta_deg: 0.17578125
+d_theta_rad: 0.0030679615757712823
 
-# TODO: measure via Ticket #6. Ouster OS1-64 vertical FOV is commonly
-# quoted as ~45 deg (+-22.5 deg) with non-uniform beam spacing across
-# that range, unlike Velodyne's uniform d_phi. A single d_phi here is a
-# simplification that Ticket #6 should either confirm as adequate or
-# replace with a real beam_elevations table.
-d_phi_deg: 0.71                # placeholder: 45 / 63 (uniform-spacing approximation)
-d_phi_rad: 0.012392241542243866
+# MEASURED: mean adjacent-beam spacing from a real per-beam elevation
+# table (perception.ring_recovery.aggregate_beam_elevation_table,
+# aggregated over 155 real frames spanning all 5 sequences). Ouster's
+# real spacing is genuinely non-uniform — observed gaps ranged
+# 0.433-0.623 deg beam-to-beam — so this single scalar is the same kind
+# of approximation this project's other sensor configs already make for
+# a single d_phi; a real beam_elevations table (see below) would be
+# more accurate if a consumer ever needs it.
+d_phi_deg: 0.5311587302026602
+d_phi_rad: 0.00927046869274867
 
-phi_max_deg: 22.5              # placeholder, per common OS1-64 spec sheets
-h_m: null                      # TODO: measure from RELLIS-3D calibration/TF, same
-                                # method as Ticket #7 uses for the HDL-32E
+# MEASURED: highest-elevation beam's real average elevation angle
+# (aggregated the same way as d_phi above). NOT +-22.5 deg as the
+# placeholder assumed — this sensor's real vertical FOV on the units
+# RELLIS-3D used is asymmetric: +17.0 deg up to -16.4 deg down.
+phi_max_deg: 17.02400000191289
 
-usable_range_m: null           # TODO: measure. RELLIS-3D range is terrain-limited
-                                # (vegetation, elevation) rather than hardware-limited
-                                # — see Build Map sensor-config table note. Do not
-                                # assume this equals a spec-sheet max range.
+# MEASURED: median height of perception.ground_prior-labelled ground
+# points (Ticket #26's real classifier) over 155 real frames spanning
+# all 5 sequences (~3.57M ground points total). Per-sequence medians:
+# 00000=1.084m 00001=1.108m 00002=0.989m 00003=1.091m 00004=1.135m —
+# a real ~0.15m spread from genuinely undulating off-road terrain
+# across different routes, not measurement noise, so treat this as a
+# representative single value with materially more real-world variance
+# than a flat-urban-ground estimate (e.g. the HDL-32E/nuScenes case)
+# would have.
+h_m: 1.0859712362289429
 
-beam_elevations: null
+usable_range_m: null           # Still not set: RELLIS-3D's usable range is
+                                # terrain-limited (vegetation, elevation), not a
+                                # single hardware number — see Build Map's sensor-
+                                # config table note. This run's own gate frame
+                                # (data/rellis/00004, frame 1000) saw returns
+                                # thin out sharply past ~40-50m (e.g. only 11
+                                # points fell in the 50-55m bin, zero beyond
+                                # 55m) but that is one frame's terrain, not a
+                                # sensor constant — do not encode it here as if
+                                # it generalises across scenes.
+
+beam_elevations: null          # A real per-beam table now exists (measured
+                                # above, via aggregate_beam_elevation_table) but
+                                # isn't wired to this field -- no consumer reads
+                                # beam_elevations yet (checked: sensor_model.py's
+                                # SensorConfig doesn't have this field at all).
+                                # Add it if a future ticket needs per-beam
+                                # accuracy beyond the single-scalar d_phi above.
