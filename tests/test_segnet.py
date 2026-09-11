@@ -210,3 +210,49 @@ def test_full_network_still_forward_passes_with_circular_padding_wired_in():
     with torch.no_grad():
         out = net(x)
     assert out.shape == (1, 10, 32, 1080)
+
+
+def test_return_attention_default_false_is_bit_for_bit_unchanged():
+    """The explainability flag must be fully opt-in -- every existing
+    caller (perception/train.py, eval/cache_inference.py) calls
+    model(x) with no return_attention argument at all, and must keep
+    getting EXACTLY the original return value. Uses the same (32, 1080)
+    input size as this file's own existing shape test -- ASPP's largest
+    dilation rate (18) needs a wide-enough bottleneck feature map, per
+    CircularConv2d's own documented "cannot wrap more than once" limit."""
+    net = FusionSegNet(n_classes=10)
+    net.eval()
+    x = torch.randn(1, N_INPUT_CHANNELS, 32, 1080)
+    with torch.no_grad():
+        torch.manual_seed(0)
+        out_default = net(x)
+        torch.manual_seed(0)
+        out_explicit_false = net(x, return_attention=False)
+    assert torch.equal(out_default, out_explicit_false)
+    assert isinstance(out_default, torch.Tensor)  # not a tuple -- eval mode, no attention requested
+
+
+def test_return_attention_true_yields_four_valid_gate_maps():
+    net = FusionSegNet(n_classes=10)
+    net.eval()
+    x = torch.randn(1, N_INPUT_CHANNELS, 32, 1080)
+    with torch.no_grad():
+        out, attention_maps = net(x, return_attention=True)
+
+    assert out.shape == (1, 10, 32, 1080)
+    assert set(attention_maps.keys()) == {"ag1", "ag2", "ag3", "ag4"}
+    for name, attn in attention_maps.items():
+        assert attn.shape[0] == 1 and attn.shape[1] == 1, f"{name} attention map must be single-channel"
+        # Sigmoid output -- a real per-pixel attention weight, not a
+        # placeholder or unbounded activation.
+        assert torch.all(attn >= 0.0) and torch.all(attn <= 1.0), f"{name} attention values outside [0,1]"
+
+
+def test_return_attention_true_during_training_still_returns_aux_head():
+    net = FusionSegNet(n_classes=10)
+    net.train()
+    x = torch.randn(2, N_INPUT_CHANNELS, 32, 1080)
+    out, aux, attention_maps = net(x, return_attention=True)
+    assert out.shape[0] == 2
+    assert aux is not None
+    assert len(attention_maps) == 4

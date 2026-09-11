@@ -158,10 +158,20 @@ class AttentionGate(nn.Module):
         self.W_x = nn.Sequential(nn.Conv2d(F_l, F_int, 1, bias=False), nn.BatchNorm2d(F_int))
         self.psi = nn.Sequential(nn.Conv2d(F_int, 1, 1, bias=False), nn.BatchNorm2d(1), nn.Sigmoid())
 
-    def forward(self, g, x):
+    def forward(self, g, x, return_attention: bool = False):
         g_up = F.interpolate(self.W_g(g), size=x.shape[2:], mode="bilinear", align_corners=False)
         psi = F.relu(g_up + self.W_x(x), inplace=True)
-        return x * self.psi(psi)
+        attn = self.psi(psi)
+        gated = x * attn
+        # `return_attention=False` (the default) preserves the exact
+        # original return value/signature -- every existing caller
+        # (perception/train.py, eval/cache_inference.py) is unaffected.
+        # `attn` itself (not `gated`) is what an explainability overlay
+        # wants: it IS the per-pixel "how much did this skip connection's
+        # signal matter here" map, in [0, 1] by construction (Sigmoid).
+        if return_attention:
+            return gated, attn
+        return gated
 
 
 class ASPP(nn.Module):
@@ -283,7 +293,17 @@ class FusionSegNet(nn.Module):
         self.upf = nn.ConvTranspose2d(32, 32, 2, 2)
         self.clf = nn.Conv2d(32, n_classes, 1)
 
-    def forward(self, x):
+    def forward(self, x, return_attention: bool = False):
+        """`return_attention=False` (the default) is BIT-FOR-BIT the
+        original method -- every existing caller is unaffected.
+        `return_attention=True` additionally returns a dict of the four
+        decoder stages' own attention maps ("ag1".."ag4", finest to
+        coarsest skip connection), each already a real [0, 1] per-pixel
+        map the trained network produced -- not a synthetic/approximated
+        saliency method bolted on afterward. Explainability tooling
+        (eval/checkpoint_attention_overlay.py) is the only intended
+        caller of this flag; training/inference call sites never pass it.
+        """
         input_hw = x.shape[2:]
         e1 = self.e1(x)
         e2 = self.e2(e1)
@@ -294,25 +314,43 @@ class FusionSegNet(nn.Module):
         b = self.aspp(e5)
         aux = self.aux_head(e3)
 
+        attention_maps = {}
+
         x = _match_size(self.u5(b), e4)
-        e4a = self.ag4(b, e4)
+        if return_attention:
+            e4a, attention_maps["ag4"] = self.ag4(b, e4, return_attention=True)
+        else:
+            e4a = self.ag4(b, e4)
         x = self.d5(torch.cat([x, e4a], 1))
 
         x = _match_size(self.u4(x), e3)
-        e3a = self.ag3(x, e3)
+        if return_attention:
+            e3a, attention_maps["ag3"] = self.ag3(x, e3, return_attention=True)
+        else:
+            e3a = self.ag3(x, e3)
         x = self.d4(torch.cat([x, e3a], 1))
 
         x = _match_size(self.u3(x), e2)
-        e2a = self.ag2(x, e2)
+        if return_attention:
+            e2a, attention_maps["ag2"] = self.ag2(x, e2, return_attention=True)
+        else:
+            e2a = self.ag2(x, e2)
         x = self.d3(torch.cat([x, e2a], 1))
 
         x = _match_size(self.u2(x), e1)
-        e1a = self.ag1(x, e1)
+        if return_attention:
+            e1a, attention_maps["ag1"] = self.ag1(x, e1, return_attention=True)
+        else:
+            e1a = self.ag1(x, e1)
         x = self.d2(torch.cat([x, e1a], 1))
 
         x = _match_size(self.upf(x), input_hw)  # final decode targets the ORIGINAL input resolution
         out = self.clf(x)
 
+        if return_attention:
+            if self.training:
+                return out, aux, attention_maps
+            return out, attention_maps
         if self.training:
             return out, aux  # deep supervision: both heads during training
         return out
