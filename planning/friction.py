@@ -25,13 +25,45 @@ accuracy. The honest claim is still real and still novel (a trained
 semantic segmentation network's own output changing a physically
 derived braking limit); just don't oversell the granularity.
 
-CLASS_TO_MU values below are DECLARED ENGINEERING ESTIMATES (a
-dry-ground/wet-vegetation/mud-or-puddle spread consistent with
-published friction-coefficient ranges for those surface types), NOT
-measured on this specific vehicle -- the same "declared, not measured"
-status `vehicle_ugv.yaml` itself gives `t_react_s` until a real test
-exists. Treat MU_DRY_REFERENCE as the terrain this project's own
-`braking_a_ms2 = 4.0` already assumes; every other class's derated
+CLASS_TO_MU values below are CITED FROM TERRAMECHANICS/BRAKING-FRICTION
+LITERATURE for WHEELED off-road vehicles (this platform's own wheel
+configuration; the same values would NOT apply to a tracked platform,
+whose shear-displacement traction model is fundamentally different --
+see Wong 2001 below), not measured on this specific vehicle:
+
+  - DRIVABLE (dry compacted dirt/gravel): mu = 0.18-0.40. Loose granular
+    material on hardpack prevents the tire rubber from achieving full
+    hysteresis/adhesion. [Wong 2001; Samuelraj et al. 2018]
+  - VEGETATION (wet grass/vegetation litter): mu = 0.10-0.20, EXTRAPOLATED
+    from documented 55-81% friction reduction under ice/snow relative to
+    dry surfaces (no wet-grass-specific wheeled-UGV braking study was
+    found; this is the best-available proxy for a wet, lubricating
+    organic boundary layer, not a direct wet-grass measurement).
+    [Salimi et al. 2015]
+  - CAUTION (mud/saturated soil/standing water): mu = 0.05-0.08, measured
+    directly at optimal braking slip (0.05 locked-wheel, 0.076 with ABS
+    regulation). Soil shear strength approaches zero once saturated.
+    [Samuelraj et al. 2018]
+
+Sources:
+  Wong, J.Y. (2001). Theory of Ground Vehicles (3rd ed.). Wiley.
+    ISBN 0-471-35461-9.
+  Samuelraj, D., Jaichandar, S., Gowthama Rajan, B., & Govindan, S.
+    (2018). "Coefficient of Friction in Different Road Conditions by
+    Various Control Methods -- An Overall Review." Intl. J. Mechanical
+    and Production Engineering Research and Development.
+  Salimi, S., Nassiri, S., & Bayat, A. (2015). "Lateral Coefficient of
+    Friction for Characterizing Winter Road Conditions." Transportation
+    Research Board.
+
+CROSS-CHECK against this project's own declared platform parameter:
+`vehicle_ugv.yaml`'s `braking_a_ms2 = 4.0` implies mu = a/g = 4.0/9.81
+~= 0.408 under the simplified friction-limited-braking model -- landing
+almost exactly at the TOP of the cited dry-dirt/gravel range above, a
+reassuring consistency check that the pre-existing config's own
+assumption was reasonable, not just re-derived from scratch. Treat
+MU_DRY_REFERENCE (set to the top of that cited range, 0.40) as the
+terrain `braking_a_ms2` already assumes; every other class's derated
 `a_max` is expressed as a fraction of that one number, so a future
 correction to `vehicle_ugv.yaml`'s own figure rescales every tier with
 it automatically rather than needing a second edit somewhere else.
@@ -46,29 +78,31 @@ from perception.taxonomy import DrishtiClass
 from planning.speed_envelope import SpeedEnvelopeResult, speed_envelope
 from sensor.vehicle_config import VehicleConfig
 
-# The terrain assumption implicit in vehicle_ugv.yaml's braking_a_ms2 --
-# dry, firm ground. See module docstring: every other class's derated
-# a_max is `braking_a_ms2 * (mu_class / MU_DRY_REFERENCE)`.
-MU_DRY_REFERENCE = 0.80
+# Top of the cited dry-compacted-dirt/gravel range (Wong 2001; Samuelraj
+# et al. 2018) -- also almost exactly what vehicle_ugv.yaml's own
+# braking_a_ms2=4.0 already implies (mu ~= 0.408). See module docstring.
+MU_DRY_REFERENCE = 0.40
 
 CLASS_TO_MU: Dict[DrishtiClass, float] = {
-    DrishtiClass.DRIVABLE: 0.80,       # dry dirt/asphalt/concrete -- the config's own baseline
-    DrishtiClass.VEGETATION: 0.45,     # grass/bush/tree litter -- meaningfully less grip than bare ground
-    DrishtiClass.CAUTION: 0.35,        # mud/puddle -- the worst realistic DRIVABLE-adjacent surface
-    DrishtiClass.UNKNOWN: 0.50,        # unobserved -- never assume best-case; a conservative middle value
+    DrishtiClass.DRIVABLE: 0.40,       # dry compacted dirt/gravel [Wong 2001; Samuelraj et al. 2018]
+    DrishtiClass.VEGETATION: 0.15,     # wet grass/vegetation litter, ice/snow-extrapolated proxy [Salimi et al. 2015]
+    DrishtiClass.CAUTION: 0.07,        # mud/saturated soil/standing water, measured braking mu [Samuelraj et al. 2018]
+    DrishtiClass.UNKNOWN: 0.15,        # unobserved -- no better an assumption than the worst COMMON
+                                        # non-hazard terrain actually cited above (vegetation), not the
+                                        # dry-ground best case, and not as extreme as the mud floor either
     # The remaining classes are hazards/obstacles the cost map already
     # keeps the planner off of (LETHAL or high-cost, see
-    # planning.costmap) -- given a low value only so that IF one is
-    # ever queried anyway (e.g. a path that grazes a hazard cell's
-    # neighbour), binding_mu()'s min() stays conservative rather than
-    # silently assuming full dry-ground grip on ground the vehicle
-    # should not be on in the first place.
-    DrishtiClass.NON_TRAVERSABLE: 0.30,
-    DrishtiClass.STATIC_OBSTACLE: 0.30,
-    DrishtiClass.VEHICLE: 0.30,
-    DrishtiClass.PEDESTRIAN: 0.30,
-    DrishtiClass.NEGATIVE_OBSTACLE: 0.30,
-    DrishtiClass.OVERHANG: 0.30,
+    # planning.costmap) -- given CAUTION's own cited mud/puddle value
+    # rather than a separately invented number, so that IF one is ever
+    # queried anyway (e.g. a path that grazes a hazard cell's
+    # neighbour), binding_mu()'s min() stays conservative and still
+    # traceable to a real citation, not an arbitrary placeholder.
+    DrishtiClass.NON_TRAVERSABLE: 0.07,
+    DrishtiClass.STATIC_OBSTACLE: 0.07,
+    DrishtiClass.VEHICLE: 0.07,
+    DrishtiClass.PEDESTRIAN: 0.07,
+    DrishtiClass.NEGATIVE_OBSTACLE: 0.07,
+    DrishtiClass.OVERHANG: 0.07,
 }
 
 
