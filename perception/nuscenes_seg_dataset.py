@@ -53,19 +53,27 @@ from __future__ import annotations
 
 import os
 import random
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from perception.frame_cache import FrameCache, apply_radial_jitter_to_raw
 from perception.ground_prior import compute_ground_prior
-from perception.input_tensor import ChannelStats, assemble_input_tensor
+from perception.input_tensor import (
+    ChannelStats,
+    _raw_channels,
+    assemble_input_tensor,
+    ground_prior_channel_from_points,
+    normalize_raw_channels,
+)
 from perception.nuscenes_loader import load_nuscenes_sweep
 from perception.range_image import project_to_range_image
 from perception.train import (
     AUG_BEAM_DROPOUT_PROB,
     AUG_JITTER_PROB,
+    AUG_JITTER_RANGE,
     _apply_beam_dropout,
     _apply_radial_jitter,
     _apply_spatial_augmentation,
@@ -163,6 +171,7 @@ class NuscenesSegDataset(Dataset):
         stats: ChannelStats,
         lut: np.ndarray,
         is_train: bool = False,
+        cache: "Optional[FrameCache]" = None,
     ):
         self.nusc = nusc
         self.items = list(items)
@@ -170,6 +179,7 @@ class NuscenesSegDataset(Dataset):
         self.stats = stats
         self.lut = lut
         self.is_train = is_train
+        self.cache = cache
         self._rng = random.Random()
 
     def __len__(self):
@@ -177,15 +187,32 @@ class NuscenesSegDataset(Dataset):
 
     def __getitem__(self, i: int):
         sample_token = self.items[i]
-        img, ground, target = _load_nuscenes_frame(self.nusc, sample_token, self.sm, self.lut)
 
-        if self.is_train and self._rng.random() < AUG_JITTER_PROB:
-            img = _apply_radial_jitter(img, self._rng)
+        if self.cache is not None:
+            # Cache holds the RAW (pre-jitter, pre-normalisation) stack
+            # -- see perception.frame_cache's own docstring on why
+            # caching must happen before jitter, not after.
+            def _compute():
+                img, ground, target = _load_nuscenes_frame(self.nusc, sample_token, self.sm, self.lut)
+                raw = _raw_channels(img, ground_prior_channel_from_points(img, ground))
+                return {"raw": raw, "target": target, "valid_mask": img.valid_mask}
 
-        tensor_np = assemble_input_tensor(img, ground, self.stats)
-        tensor = torch.from_numpy(tensor_np).float()
-        target_t = torch.from_numpy(target).long()
-        valid_t = torch.from_numpy(img.valid_mask).bool()
+            cached = self.cache.get_or_compute(sample_token, _compute)
+            raw, target, valid_mask_np = cached["raw"], cached["target"], cached["valid_mask"]
+            if self.is_train and self._rng.random() < AUG_JITTER_PROB:
+                raw = apply_radial_jitter_to_raw(raw, self._rng.uniform(*AUG_JITTER_RANGE))
+            tensor_np = normalize_raw_channels(raw, self.stats)
+            tensor = torch.from_numpy(tensor_np).float()
+            target_t = torch.from_numpy(target).long()
+            valid_t = torch.from_numpy(valid_mask_np).bool()
+        else:
+            img, ground, target = _load_nuscenes_frame(self.nusc, sample_token, self.sm, self.lut)
+            if self.is_train and self._rng.random() < AUG_JITTER_PROB:
+                img = _apply_radial_jitter(img, self._rng)
+            tensor_np = assemble_input_tensor(img, ground, self.stats)
+            tensor = torch.from_numpy(tensor_np).float()
+            target_t = torch.from_numpy(target).long()
+            valid_t = torch.from_numpy(img.valid_mask).bool()
 
         if self.is_train:
             tensor, target_t, valid_t = _apply_spatial_augmentation(tensor, target_t, valid_t, self._rng)

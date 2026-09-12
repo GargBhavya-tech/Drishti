@@ -50,6 +50,8 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
+from perception.frame_cache import FrameCache
+
 from perception.input_tensor import (
     N_CHANNELS,
     _raw_channels,
@@ -111,6 +113,7 @@ def train_nuscenes(
     use_class_weights: bool = True,
     focal_gamma: Optional[float] = None,
     val_scene_fraction: float = 0.2,
+    cache_dir: Optional[str] = None,
 ) -> None:
     """`init_from_checkpoint`: same semantics as perception.train.train's
     own parameter -- load ONLY model weights (fresh optimizer/scheduler/
@@ -174,8 +177,15 @@ def train_nuscenes(
             f"they cannot learn anything and will report IoU=NaN. Check before burning GPU hours."
         )
 
-    train_ds = NuscenesSegDataset(nusc, train_items, sm, stats, lut, is_train=True)
-    val_ds = NuscenesSegDataset(nusc, val_items, sm, stats, lut, is_train=False)
+    train_cache = FrameCache(Path(cache_dir) / "nuscenes_train") if cache_dir else None
+    val_cache = FrameCache(Path(cache_dir) / "nuscenes_val") if cache_dir else None
+    if cache_dir:
+        print(
+            f"Frame caching ENABLED at {cache_dir} -- first epoch pays the full compute cost, "
+            f"epoch 2+ reads from disk (see perception/frame_cache.py's own docstring)."
+        )
+    train_ds = NuscenesSegDataset(nusc, train_items, sm, stats, lut, is_train=True, cache=train_cache)
+    val_ds = NuscenesSegDataset(nusc, val_items, sm, stats, lut, is_train=False, cache=val_cache)
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
     val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=num_workers)
 
@@ -325,6 +335,13 @@ if __name__ == "__main__":
     parser.add_argument("--focal-gamma", type=float, default=None)
     parser.add_argument("--val-scene-fraction", type=float, default=0.2)
     parser.add_argument("--no-class-weights", action="store_true")
+    parser.add_argument(
+        "--cache-dir", default=None,
+        help="Enable on-disk frame caching under this directory (see perception/frame_cache.py). "
+             "Off by default -- only helps for multi-epoch runs; the first epoch pays the full "
+             "compute cost regardless. nuScenes-mini's small size (~730MB estimated raw-stack cache) "
+             "fits comfortably even on a nearly-full disk.",
+    )
     args = parser.parse_args()
 
     train_nuscenes(
@@ -340,4 +357,5 @@ if __name__ == "__main__":
         use_class_weights=not args.no_class_weights,
         focal_gamma=args.focal_gamma,
         val_scene_fraction=args.val_scene_fraction,
+        cache_dir=args.cache_dir,
     )

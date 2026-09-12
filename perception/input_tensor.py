@@ -147,6 +147,24 @@ def load_stats(path: str | Path) -> ChannelStats:
     return stats
 
 
+def normalize_raw_channels(raw: np.ndarray, stats: ChannelStats) -> np.ndarray:
+    """The normalisation step of assemble_input_tensor, factored out so
+    a caller that already has a RAW (pre-normalisation) 13-channel stack
+    -- e.g. one loaded from perception.frame_cache instead of freshly
+    projected -- can normalise it without recomputing the expensive
+    projection/ground-prior/surface-geometry work `_raw_channels` does.
+    Extracted from assemble_input_tensor's own tail; that function's
+    behaviour is bit-for-bit unchanged by this refactor -- see this
+    module's own tests."""
+    out = np.empty_like(raw)
+    for c in range(N_CHANNELS):
+        if c == VALID_MASK_CHANNEL:
+            out[c] = raw[c]
+            continue
+        out[c] = (raw[c] - stats.mean[c]) / stats.std[c]
+    return out
+
+
 def assemble_input_tensor(img: RangeImage, ground: GroundPriorResult, stats: ChannelStats) -> np.ndarray:
     """(13, H, W) tensor, normalised to ~zero-mean/unit-variance per
     channel using SAVED stats (never recomputed here -- Ticket #27
@@ -156,11 +174,4 @@ def assemble_input_tensor(img: RangeImage, ground: GroundPriorResult, stats: Cha
     """
     ground_channel = ground_prior_channel_from_points(img, ground)
     raw = _raw_channels(img, ground_channel)
-
-    out = np.empty_like(raw)
-    for c in range(N_CHANNELS):
-        if c == VALID_MASK_CHANNEL:
-            out[c] = raw[c]
-            continue
-        out[c] = (raw[c] - stats.mean[c]) / stats.std[c]
-    return out
+    return normalize_raw_channels(raw, stats)
