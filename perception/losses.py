@@ -141,6 +141,39 @@ def confidence_weighted_ce_loss(
     return per_pixel.mean()
 
 
+def focal_loss(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    valid_mask: torch.Tensor,
+    gamma: float = 2.0,
+    class_weight: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    """Standard focal loss (Lin et al. 2017): FL = (1 - p_t)^gamma * CE,
+    where p_t = exp(-CE) recovers the model's own predicted probability
+    of the true class from the per-pixel CE value directly (no separate
+    softmax needed). Down-weights the (already-easy, already-numerous)
+    well-classified pixels' contribution and concentrates gradient on
+    hard/rare ones -- added specifically for class 4 (STATIC_OBSTACLE),
+    which real-data validation (`eval/validate_feature_hypotheses.py`,
+    check C) found is 0.051% of all training pixels, and which stayed at
+    EXACTLY 0.0 IoU across all 20 epochs of a fine-tune that used class
+    weighting alone (`checkpoints_multi_v2/training_log.jsonl`) -- i.e.
+    reweighting the loss was not enough by itself; this is the next,
+    complementary lever (used alongside class_weight, not instead of
+    it -- the two address different things: class_weight scales a
+    class's overall gradient magnitude, gamma re-shapes the PER-PIXEL
+    weighting toward hard examples within any class).
+
+    Same masking discipline as every other loss here: `_flatten_valid`
+    excludes invalid pixels from the computation graph entirely."""
+    logits_v, targets_v, _ = _flatten_valid(logits, targets, valid_mask)
+    if logits_v.shape[0] == 0:
+        return logits.sum() * 0.0
+    ce = F.cross_entropy(logits_v, targets_v, weight=class_weight, reduction="none")
+    pt = torch.exp(-ce)
+    return ((1.0 - pt) ** gamma * ce).mean()
+
+
 class DrishtiSegLoss(nn.Module):
     """Bible Part 5.4's full stack: Lovász (primary) + confidence-
     weighted CE (secondary) + Lovász on the aux head at its own
@@ -149,10 +182,22 @@ class DrishtiSegLoss(nn.Module):
     reasonably and left configurable rather than hardcoded as unlabelled
     magic numbers -- tune during actual training (Ticket #30)."""
 
-    def __init__(self, ce_weight: float = 0.5, aux_weight: float = 0.4, class_weight: Optional[torch.Tensor] = None):
+    def __init__(
+        self,
+        ce_weight: float = 0.5,
+        aux_weight: float = 0.4,
+        class_weight: Optional[torch.Tensor] = None,
+        focal_gamma: Optional[float] = None,
+        focal_weight: float = 0.5,
+    ):
         super().__init__()
         self.ce_weight = ce_weight
         self.aux_weight = aux_weight
+        # None (default) keeps this term OFF entirely -- existing
+        # callers/tests that construct DrishtiSegLoss without this
+        # argument get byte-identical behaviour to before it existed.
+        self.focal_gamma = focal_gamma
+        self.focal_weight = focal_weight
         # Registered as a buffer (not a plain attribute) so it moves
         # with the module under .to(device) -- a class_weight left on
         # the wrong device would raise at the first forward() call
@@ -170,6 +215,10 @@ class DrishtiSegLoss(nn.Module):
         primary = lovasz_softmax_loss(logits, targets, valid_mask)
         secondary = confidence_weighted_ce_loss(logits, targets, valid_mask, confidence, class_weight=self.class_weight)
         total = primary + self.ce_weight * secondary
+
+        if self.focal_gamma is not None:
+            focal = focal_loss(logits, targets, valid_mask, gamma=self.focal_gamma, class_weight=self.class_weight)
+            total = total + self.focal_weight * focal
 
         if aux_logits is not None:
             H_aux, W_aux = aux_logits.shape[2:]

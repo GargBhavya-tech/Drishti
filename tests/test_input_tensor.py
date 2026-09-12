@@ -15,6 +15,7 @@ import pytest
 
 from perception.ground_prior import compute_ground_prior
 from perception.input_tensor import (
+    CHANNEL_NAMES,
     N_CHANNELS,
     VALID_MASK_CHANNEL,
     _raw_channels,
@@ -65,7 +66,7 @@ def test_tensor_shape_is_9_H_W(hdl32e):
     stats = compute_channel_stats([raw])
     tensor = assemble_input_tensor(img, ground, stats)
     assert tensor.shape == (N_CHANNELS, img.H, img.W)
-    assert tensor.shape == (9, 32, 360)
+    assert tensor.shape == (13, 32, 360)
 
 
 def test_normalised_channels_are_roughly_zero_mean_unit_std(hdl32e):
@@ -76,9 +77,21 @@ def test_normalised_channels_are_roughly_zero_mean_unit_std(hdl32e):
     stats = compute_channel_stats([raw])
     tensor = assemble_input_tensor(img, ground, stats)
 
+    # The surface-geometry channels (normal_x/y/z, curvature) require
+    # neighbouring pixels to lie on a genuinely coherent surface --
+    # `_synthetic_sweep`'s points are drawn independently at random
+    # (Ticket #27's own fixture, built for channel-normalisation
+    # sanity, not surface coherence), so EVERY neighbour pair exceeds
+    # `perception.surface_geometry.MAX_NEIGHBOR_RANGE_JUMP_M` and the
+    # whole channel is legitimately all-zero here -- a real, correct
+    # `geometry_valid=False` everywhere, not a bug. Their real behaviour
+    # on an actually coherent surface has its own dedicated test file,
+    # tests/test_surface_geometry.py.
+    geometry_channels = {CHANNEL_NAMES.index(n) for n in ("normal_x", "normal_y", "normal_z", "curvature")}
+
     valid = img.valid_mask
     for c in range(N_CHANNELS):
-        if c == VALID_MASK_CHANNEL:
+        if c == VALID_MASK_CHANNEL or c in geometry_channels:
             continue
         vals = tensor[c][valid]
         if vals.size == 0:
@@ -139,5 +152,5 @@ def test_real_rellis_frame_assembles_end_to_end():
     stats = compute_channel_stats([raw])
     tensor = assemble_input_tensor(img, ground, stats)
 
-    assert tensor.shape == (9, sm.n_beams, img.W)
+    assert tensor.shape == (13, sm.n_beams, img.W)
     assert np.isfinite(tensor).all()

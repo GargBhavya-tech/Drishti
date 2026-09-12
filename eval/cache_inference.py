@@ -36,9 +36,15 @@ from typing import List, Optional
 import numpy as np
 import torch
 
-from perception.input_tensor import assemble_input_tensor, load_stats
+from perception.input_tensor import N_CHANNELS, assemble_input_tensor, load_stats
 from perception.rellis_loader import load_rellis_labels, load_rellis_sweep
-from perception.segnet import FusionSegNet, N_CLASSES_DEFAULT
+from perception.segnet import (
+    STEM_CONV_STATE_DICT_KEY,
+    FusionSegNet,
+    N_CLASSES_DEFAULT,
+    expand_stem_conv_for_checkpoint,
+    remap_legacy_conv_keys,
+)
 from perception.taxonomy import DrishtiClass, rellis_label_ids_to_drishti
 from perception.train import _load_frame
 from sensor.sensor_model import load_sensor_config
@@ -46,31 +52,24 @@ from sensor.sensor_model import load_sensor_config
 UNKNOWN = int(DrishtiClass.UNKNOWN)
 
 
-def _remap_legacy_conv_keys(state_dict: dict, expected_keys: set) -> dict:
-    """Run #1/#2's checkpoints were trained BEFORE this session's circular-
-    padding fix wrapped ASPP's branches and the decoder's _dblock convs in
-    CircularConv2d (perception/segnet.py) -- that wrapping renames each
-    conv's own parameters from e.g. "aspp.branches.0.0.weight" to
-    "aspp.branches.0.0.conv.weight" (a new ".conv." submodule), with the
-    SAME tensor shapes (verified: all 12 renamed keys, identical shapes,
-    no bias keys since these convs use bias=False) -- the operation is
-    functionally unchanged, only its parameter path moved. Remap old-style
-    keys to new-style ones rather than silently failing to load, or
-    forcing a from-scratch retrain of an already-good (0.562 mIoU)
-    checkpoint over a rename."""
-    if expected_keys.issubset(state_dict.keys()):
-        return state_dict  # already new-style, e.g. a checkpoint trained after this fix
-    remapped = {}
-    for key, value in state_dict.items():
-        new_key = key.replace(".weight", ".conv.weight").replace(".bias", ".conv.bias")
-        remapped[new_key if new_key in expected_keys else key] = value
-    return remapped
-
-
 def load_trained_model(checkpoint_path: str | Path, device: str = "cpu"):
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model = FusionSegNet(n_classes=N_CLASSES_DEFAULT).to(device)
-    state_dict = _remap_legacy_conv_keys(ckpt["model_state"], set(model.state_dict().keys()))
+    state_dict = remap_legacy_conv_keys(ckpt["model_state"], set(model.state_dict().keys()))
+
+    # Every eval/checkpoint_*.py script loads OLD checkpoints (9 input
+    # channels, from before the reflectivity/surface-geometry channels
+    # were added) through this exact function -- without this check,
+    # every one of them breaks with a state_dict shape-mismatch the
+    # moment perception.input_tensor.N_CHANNELS changes, since
+    # FusionSegNet is now built with the CURRENT (13) channel count by
+    # default. See perception.train's own `--init-from-checkpoint`
+    # path for the identical fix; kept in sync deliberately (same
+    # helper, same key), not re-implemented differently here.
+    old_in_channels = state_dict[STEM_CONV_STATE_DICT_KEY].shape[1]
+    if old_in_channels != N_CHANNELS:
+        state_dict = expand_stem_conv_for_checkpoint(state_dict, N_CHANNELS)
+
     model.load_state_dict(state_dict)
     model.eval()
     return model, ckpt.get("epoch")

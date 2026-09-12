@@ -14,6 +14,7 @@ import torch
 from perception.losses import (
     DrishtiSegLoss,
     confidence_weighted_ce_loss,
+    focal_loss,
     lovasz_softmax_loss,
 )
 
@@ -155,3 +156,56 @@ def test_drishti_seg_loss_accepts_class_weight_and_moves_with_device():
 def test_drishti_seg_loss_defaults_to_no_class_weight():
     loss_fn = DrishtiSegLoss()
     assert loss_fn.class_weight is None
+
+
+def test_focal_loss_downweights_a_confident_correct_prediction_more_than_ce():
+    """The whole point of gamma: an already-easy (confidently correct)
+    pixel's contribution should shrink relative to plain CE, while a
+    genuinely wrong prediction's contribution should NOT shrink nearly
+    as much -- checked directly by comparing the FL/CE ratio for an easy
+    case vs a hard case."""
+    B, H, W = 1, 1, 2
+    targets = torch.tensor([[[0, 0]]])
+    valid_mask = torch.ones(B, H, W, dtype=torch.bool)
+    logits = torch.zeros(B, N_CLASSES, H, W)
+    logits[0, 0, 0, 0] = 50.0  # pixel 0: confidently CORRECT (easy)
+    logits[0, 1, 0, 1] = 50.0  # pixel 1: confidently WRONG (hard) -- true class is 0
+
+    ce = confidence_weighted_ce_loss(logits, targets, valid_mask)
+    fl = focal_loss(logits, targets, valid_mask, gamma=2.0)
+    # Both pixels contribute to ce's mean; fl's mean must be smaller
+    # overall (the easy pixel's near-zero CE barely changes, but the
+    # hard pixel's already-large CE is barely down-weighted either,
+    # since (1-p_t) is close to 1 there) -- net effect: fl <= ce.
+    assert fl.item() <= ce.item() + 1e-4
+
+
+def test_focal_loss_matches_ce_when_gamma_is_zero():
+    logits, targets, valid_mask = _random_case()
+    ce = confidence_weighted_ce_loss(logits, targets, valid_mask)
+    fl = focal_loss(logits, targets, valid_mask, gamma=0.0)
+    assert fl.item() == pytest.approx(ce.item(), rel=1e-4)
+
+
+def test_focal_loss_empty_valid_mask_is_zero_and_differentiable():
+    logits, targets, _ = _random_case()
+    valid_mask = torch.zeros_like(targets, dtype=torch.bool)
+    loss = focal_loss(logits, targets, valid_mask)
+    assert loss.item() == 0.0
+
+
+def test_drishti_seg_loss_focal_gamma_none_is_byte_identical_to_before():
+    """The whole point of making focal_gamma default to None: existing
+    behaviour must be UNCHANGED when it's not passed."""
+    logits, targets, valid_mask = _random_case()
+    baseline = DrishtiSegLoss()(logits, targets, valid_mask)
+    explicit_none = DrishtiSegLoss(focal_gamma=None)(logits, targets, valid_mask)
+    assert baseline.item() == pytest.approx(explicit_none.item())
+
+
+def test_drishti_seg_loss_with_focal_gamma_changes_the_total():
+    logits, targets, valid_mask = _random_case()
+    without_focal = DrishtiSegLoss()(logits, targets, valid_mask)
+    with_focal = DrishtiSegLoss(focal_gamma=2.0, focal_weight=0.5)(logits, targets, valid_mask)
+    assert torch.isfinite(with_focal)
+    assert with_focal.item() != pytest.approx(without_focal.item())

@@ -82,8 +82,14 @@ import torch.nn.functional as F
 from torchvision.models import efficientnet_b0
 
 from perception.circular_pad import circular_pad_horizontal
+from perception.input_tensor import N_CHANNELS as N_INPUT_CHANNELS
 
-N_INPUT_CHANNELS = 9  # Ticket #27's assembled tensor channel count
+# N_INPUT_CHANNELS now imported from perception.input_tensor (the single
+# source of truth for the assembled tensor's channel count) rather than
+# duplicated as a literal here -- the two constants had already drifted
+# apart once (this file said 9 while input_tensor.py grew to 13) before
+# this fix, exactly the class of bug this project's own culture guards
+# against elsewhere (e.g. vehicle_ugv.yaml's "declared once" discipline).
 N_CLASSES_DEFAULT = 10  # perception.taxonomy.DrishtiClass
 
 
@@ -232,6 +238,77 @@ def _match_size(x: torch.Tensor, target) -> torch.Tensor:
     if tuple(x.shape[2:]) == tuple(target_hw):
         return x
     return F.interpolate(x, size=target_hw, mode="bilinear", align_corners=False)
+
+
+STEM_CONV_STATE_DICT_KEY = "e1.0.0.weight"  # verified against a real checkpoint: shape (32, 9, 3, 3)
+
+
+def remap_legacy_conv_keys(state_dict: dict, expected_keys: set) -> dict:
+    """Run #1/#2's checkpoints were trained BEFORE ASPP's branches and the
+    decoder's _dblock convs were wrapped in CircularConv2d -- that
+    wrapping renames each conv's own parameters from e.g.
+    "aspp.branches.0.0.weight" to "aspp.branches.0.0.conv.weight" (a new
+    ".conv." submodule), with the SAME tensor shapes (all renamed keys,
+    identical shapes, no bias keys since these convs use bias=False) --
+    the operation is functionally unchanged, only its parameter path
+    moved. Remap old-style keys to new-style ones rather than silently
+    failing to load, or forcing a from-scratch retrain of an
+    already-good checkpoint over a rename.
+
+    Moved here from eval/cache_inference.py (where it originated) so
+    perception.train's own `--init-from-checkpoint` path can share the
+    SAME logic instead of re-implementing it -- that path never had this
+    fix, which is exactly why `checkpoint_epoch19.pt` (itself pre-dating
+    this rename) failed to warm-start a fresh run until this move.
+    """
+    if expected_keys.issubset(state_dict.keys()):
+        return state_dict  # already new-style, e.g. a checkpoint trained after this fix
+    remapped = {}
+    for key, value in state_dict.items():
+        new_key = key.replace(".weight", ".conv.weight").replace(".bias", ".conv.bias")
+        remapped[new_key if new_key in expected_keys else key] = value
+    return remapped
+
+
+def expand_stem_conv_for_checkpoint(
+    state_dict: dict, new_in_channels: int, stem_key: str = STEM_CONV_STATE_DICT_KEY
+) -> dict:
+    """Grows an existing checkpoint's stem conv weight from its old
+    in_channels to `new_in_channels`, PRESERVING the old channels'
+    trained weights and zero-initialising the new ones -- so a model
+    built with `FusionSegNet(in_channels=new_in_channels)` can load this
+    checkpoint and, for the channels that already existed, start
+    numerically IDENTICAL to the old checkpoint (a zero-weighted new
+    channel contributes nothing to the conv's output, whatever value it
+    holds) rather than the fresh model's random reinitialisation of the
+    entire stem, which would discard everything the old channels
+    already learned. Only the stem conv key is touched; every other key
+    in the returned dict is the input state_dict's own value, unchanged
+    (shapes are identical everywhere else since only the FIRST layer's
+    input width depends on the channel count).
+
+    Returns a NEW dict (the input is not mutated). Raises if
+    `new_in_channels` is smaller than the checkpoint's own channel count
+    -- shrinking would silently discard trained channels, which is never
+    the intended use of this function.
+    """
+    old_weight = state_dict[stem_key]
+    old_in_channels = old_weight.shape[1]
+    if new_in_channels < old_in_channels:
+        raise ValueError(
+            f"new_in_channels ({new_in_channels}) < checkpoint's own {old_in_channels} -- "
+            f"this function only grows channel count, it does not shrink it."
+        )
+    if new_in_channels == old_in_channels:
+        return dict(state_dict)
+
+    out_channels, _, kh, kw = old_weight.shape
+    new_weight = torch.zeros((out_channels, new_in_channels, kh, kw), dtype=old_weight.dtype)
+    new_weight[:, :old_in_channels, :, :] = old_weight
+
+    expanded = dict(state_dict)
+    expanded[stem_key] = new_weight
+    return expanded
 
 
 class FusionSegNet(nn.Module):

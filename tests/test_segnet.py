@@ -20,7 +20,16 @@ import pytest
 import torch
 
 import perception.segnet as segnet_module
-from perception.segnet import ASPP, CircularConv2d, FusionSegNet, N_CLASSES_DEFAULT, N_INPUT_CHANNELS, _dblock
+from perception.segnet import (
+    ASPP,
+    STEM_CONV_STATE_DICT_KEY,
+    CircularConv2d,
+    FusionSegNet,
+    N_CLASSES_DEFAULT,
+    N_INPUT_CHANNELS,
+    _dblock,
+    expand_stem_conv_for_checkpoint,
+)
 
 
 def test_eval_forward_pass_matches_ticket_28_shape():
@@ -256,3 +265,61 @@ def test_return_attention_true_during_training_still_returns_aux_head():
     assert out.shape[0] == 2
     assert aux is not None
     assert len(attention_maps) == 4
+
+
+def test_expand_stem_conv_preserves_old_channels_and_zero_inits_new_ones():
+    old_weight = torch.randn(32, 9, 3, 3)
+    state_dict = {STEM_CONV_STATE_DICT_KEY: old_weight, "other.key": torch.randn(5)}
+
+    expanded = expand_stem_conv_for_checkpoint(state_dict, new_in_channels=13)
+
+    new_weight = expanded[STEM_CONV_STATE_DICT_KEY]
+    assert new_weight.shape == (32, 13, 3, 3)
+    torch.testing.assert_close(new_weight[:, :9, :, :], old_weight)
+    assert torch.all(new_weight[:, 9:, :, :] == 0.0)
+    # Every other key must be untouched (same tensor, not a copy that
+    # happens to have the same values).
+    assert expanded["other.key"] is state_dict["other.key"]
+    # The input dict itself must not be mutated.
+    assert state_dict[STEM_CONV_STATE_DICT_KEY] is old_weight
+
+
+def test_expand_stem_conv_same_channel_count_is_a_no_op():
+    old_weight = torch.randn(32, 9, 3, 3)
+    state_dict = {STEM_CONV_STATE_DICT_KEY: old_weight}
+    expanded = expand_stem_conv_for_checkpoint(state_dict, new_in_channels=9)
+    torch.testing.assert_close(expanded[STEM_CONV_STATE_DICT_KEY], old_weight)
+
+
+def test_expand_stem_conv_rejects_shrinking():
+    state_dict = {STEM_CONV_STATE_DICT_KEY: torch.randn(32, 13, 3, 3)}
+    with pytest.raises(ValueError):
+        expand_stem_conv_for_checkpoint(state_dict, new_in_channels=9)
+
+
+def test_expanded_model_produces_bit_identical_output_when_new_channels_are_zero():
+    """The whole POINT of zero-initialising new channels: a model built
+    with the expanded channel count, loading a weight-surgeried old
+    checkpoint, must produce EXACTLY the same output as the original
+    model did, as long as the new input channels are fed ZEROS (they
+    contribute nothing through a zero weight, regardless of their
+    actual input values -- but zero input makes the equivalence
+    trivially checkable without depending on that fact separately)."""
+    torch.manual_seed(0)
+    old_model = FusionSegNet(n_classes=10, in_channels=9)
+    old_model.eval()
+    x_old = torch.randn(1, 9, 32, 1080)
+    with torch.no_grad():
+        old_out = old_model(x_old)
+
+    expanded_state = expand_stem_conv_for_checkpoint(old_model.state_dict(), new_in_channels=13)
+    new_model = FusionSegNet(n_classes=10, in_channels=13)
+    new_model.load_state_dict(expanded_state)
+    new_model.eval()
+
+    x_new = torch.zeros(1, 13, 32, 1080)
+    x_new[:, :9, :, :] = x_old
+    with torch.no_grad():
+        new_out = new_model(x_new)
+
+    torch.testing.assert_close(new_out, old_out)

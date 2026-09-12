@@ -41,8 +41,10 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 
+from perception.cutmix import RareClusterSet, load_clusters, paste_rare_cluster
 from perception.ground_prior import compute_ground_prior
 from perception.input_tensor import (
+    N_CHANNELS,
     ChannelStats,
     assemble_input_tensor,
     compute_channel_stats,
@@ -54,7 +56,13 @@ from perception.input_tensor import (
 from perception.losses import DrishtiSegLoss
 from perception.range_image import project_to_range_image
 from perception.rellis_loader import load_rellis_labels, load_rellis_sweep
-from perception.segnet import FusionSegNet, N_CLASSES_DEFAULT
+from perception.segnet import (
+    STEM_CONV_STATE_DICT_KEY,
+    FusionSegNet,
+    N_CLASSES_DEFAULT,
+    expand_stem_conv_for_checkpoint,
+    remap_legacy_conv_keys,
+)
 from perception.taxonomy import rellis_label_ids_to_drishti
 from sensor.sensor_model import SensorConfig, load_sensor_config
 
@@ -100,6 +108,38 @@ def _load_frame(sequence_dir: Path, frame_idx: int, sm: SensorConfig):
     return img, ground, target
 
 
+def _load_frame_with_cutmix(
+    sequence_dir: Path,
+    frame_idx: int,
+    sm: SensorConfig,
+    clusters: "RareClusterSet",
+    target_class: int,
+    rng: np.random.Generator,
+):
+    """Same as `_load_frame`, but pastes a real harvested rare-class
+    cluster (`perception.cutmix.paste_rare_cluster`) into the raw sweep
+    BEFORE projection, so the pasted points go through the exact same
+    occlusion-aware `project_to_range_image` z-buffering as every real
+    point -- see `perception/cutmix.py`'s own module docstring for why
+    this must happen pre-projection, not as an image-space patch paste.
+    """
+    sweep = load_rellis_sweep(sequence_dir, frame_idx)
+    raw_labels = load_rellis_labels(sequence_dir, frame_idx)
+    drishti_labels = rellis_label_ids_to_drishti(raw_labels)
+
+    sweep, drishti_labels = paste_rare_cluster(sweep, drishti_labels, clusters, target_class, rng)
+
+    img = project_to_range_image(sweep, sm)
+    ground = compute_ground_prior(sweep, n_azimuth_bins=img.W)
+
+    target = np.zeros((img.H, img.W), dtype=np.int64)
+    touched = img.point_index >= 0
+    src = img.point_index[touched]
+    target[touched] = drishti_labels[src]
+
+    return img, ground, target
+
+
 # Augmentation constants -- chosen to stay physically plausible (a real
 # sensor's own range noise is a few percent, not tens), not tuned
 # against any specific metric.
@@ -107,6 +147,22 @@ AUG_JITTER_PROB = 0.5
 AUG_JITTER_RANGE = (0.95, 1.05)  # multiplicative, applied to x/y/z/range TOGETHER (radial)
 AUG_ROLL_PROB = 0.5  # circular azimuth shift -- the network's own circular padding makes this "free"
 AUG_FLIP_PROB = 0.5  # azimuth mirror -- LiDAR has no inherent left/right asymmetry
+
+# Beam-dropout: simulates a sparser sensor (32/21/16 effective beams from
+# this project's real 64-beam Ouster) by decimating ROWS of the already-
+# projected (H, W) tensor -- H IS the beam/elevation axis by construction
+# (perception.range_image.project_to_range_image), so dropping every
+# k-th row's worth of rows is equivalent to the network never having
+# seen those beams at all, not merely zeroed pixels it could otherwise
+# infer from context. EVENLY-SPACED decimation (not a random subset) is
+# used deliberately -- it is what a real coarser-beam-spacing sensor
+# actually looks like (fewer beams spread evenly across the same
+# vertical FOV), not an arbitrary corruption.
+AUG_BEAM_DROPOUT_PROB = 0.3
+BEAM_DROPOUT_STRIDES = (2, 3, 4)  # ~32, ~21, ~16 effective beams from 64
+
+AUG_CUTMIX_PROB = 0.3  # see perception/cutmix.py; targets class 4's confirmed 0.051% prevalence
+CUTMIX_TARGET_CLASS = 4  # DrishtiClass.STATIC_OBSTACLE
 
 
 def _apply_radial_jitter(img, rng: random.Random):
@@ -141,6 +197,28 @@ def _apply_spatial_augmentation(tensor: torch.Tensor, target: torch.Tensor, vali
     return tensor, target, valid_mask
 
 
+def _apply_beam_dropout(tensor: torch.Tensor, valid_mask: torch.Tensor, rng: random.Random):
+    """Zeroes an evenly-spaced subset of BEAM ROWS in `tensor` and marks
+    those same rows invalid in `valid_mask` -- see AUG_BEAM_DROPOUT_PROB's
+    own comment for why this simulates a real coarser-beam sensor rather
+    than an arbitrary corruption. `target` is untouched: the loss already
+    only scores pixels where `valid_mask` is True (the SAME mechanism
+    that already excludes non-projected pixels), so dropped rows are
+    excluded from the loss for free, not by editing labels."""
+    H = tensor.shape[1]
+    stride = rng.choice(BEAM_DROPOUT_STRIDES)
+    offset = rng.randint(0, stride - 1)
+    keep = torch.zeros(H, dtype=torch.bool)
+    keep[offset::stride] = True
+    drop_rows = ~keep
+
+    tensor = tensor.clone()
+    tensor[:, drop_rows, :] = 0.0
+    valid_mask = valid_mask.clone()
+    valid_mask[drop_rows, :] = False
+    return tensor, valid_mask
+
+
 class RellisSegDataset(Dataset):
     """One item = one frame: (input_tensor (9,H,W), target (H,W) int64,
     valid_mask (H,W) bool). `items` is a list of (sequence_dir, frame_idx)
@@ -153,19 +231,40 @@ class RellisSegDataset(Dataset):
     shuffle-split, no leakage" discipline extended to "no augmentation
     leakage into the number you report."""
 
-    def __init__(self, items: list, sm: SensorConfig, stats: ChannelStats, is_train: bool = False):
+    def __init__(
+        self,
+        items: list,
+        sm: SensorConfig,
+        stats: ChannelStats,
+        is_train: bool = False,
+        cutmix_clusters: Optional[RareClusterSet] = None,
+    ):
         self.items = list(items)
         self.sm = sm
         self.stats = stats
         self.is_train = is_train
+        self.cutmix_clusters = cutmix_clusters
         self._rng = random.Random()
+        self._np_rng = np.random.default_rng()
 
     def __len__(self):
         return len(self.items)
 
     def __getitem__(self, i: int):
         sequence_dir, frame_idx = self.items[i]
-        img, ground, target = _load_frame(sequence_dir, frame_idx, self.sm)
+
+        use_cutmix = (
+            self.is_train
+            and self.cutmix_clusters is not None
+            and self.cutmix_clusters.clusters
+            and self._rng.random() < AUG_CUTMIX_PROB
+        )
+        if use_cutmix:
+            img, ground, target = _load_frame_with_cutmix(
+                sequence_dir, frame_idx, self.sm, self.cutmix_clusters, CUTMIX_TARGET_CLASS, self._np_rng
+            )
+        else:
+            img, ground, target = _load_frame(sequence_dir, frame_idx, self.sm)
 
         if self.is_train and self._rng.random() < AUG_JITTER_PROB:
             img = _apply_radial_jitter(img, self._rng)
@@ -177,6 +276,8 @@ class RellisSegDataset(Dataset):
 
         if self.is_train:
             tensor, target_t, valid_t = _apply_spatial_augmentation(tensor, target_t, valid_t, self._rng)
+            if self._rng.random() < AUG_BEAM_DROPOUT_PROB:
+                tensor, valid_t = _apply_beam_dropout(tensor, valid_t, self._rng)
 
         return tensor, target_t, valid_t
 
@@ -281,6 +382,8 @@ def train(
     max_stats_frames: int = 30,
     init_from_checkpoint: Optional[str] = None,
     use_class_weights: bool = True,
+    focal_gamma: Optional[float] = None,
+    cutmix_clusters_path: Optional[str] = None,
 ) -> None:
     """`init_from_checkpoint`: load ONLY model weights from a prior
     run's checkpoint (e.g. `checkpoints_multi/checkpoint_epoch19.pt`)
@@ -344,7 +447,12 @@ def train(
         print(f"WARNING: classes {zero_classes} have ZERO pixels in the sampled training data -- "
               f"they cannot learn anything and will report IoU=NaN. Check before burning GPU hours.")
 
-    train_ds = RellisSegDataset(train_items, sm, stats, is_train=True)
+    cutmix_clusters = None
+    if cutmix_clusters_path:
+        cutmix_clusters = load_clusters(cutmix_clusters_path)
+        print(f"Loaded {len(cutmix_clusters.clusters)} CutMix clusters from {cutmix_clusters_path}")
+
+    train_ds = RellisSegDataset(train_items, sm, stats, is_train=True, cutmix_clusters=cutmix_clusters)
     val_ds = RellisSegDataset(val_items, sm, stats, is_train=False)
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
     val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=num_workers)
@@ -354,7 +462,31 @@ def train(
     ckpt_path = out_dir / "checkpoint.pt"
     if init_from_checkpoint and not ckpt_path.exists():
         init_ckpt = torch.load(init_from_checkpoint, map_location=device)
-        model.load_state_dict(init_ckpt["model_state"])
+        init_state = init_ckpt["model_state"]
+        # Older checkpoints (e.g. checkpoint_epoch19.pt) pre-date ASPP/
+        # decoder convs being wrapped in CircularConv2d, which renamed
+        # their own parameter keys -- see
+        # perception.segnet.remap_legacy_conv_keys's own docstring.
+        # eval/cache_inference.py already had this fix; this path did
+        # not, which is why loading checkpoint_epoch19.pt here failed
+        # until now.
+        init_state = remap_legacy_conv_keys(init_state, set(model.state_dict().keys()))
+        old_in_channels = init_state[STEM_CONV_STATE_DICT_KEY].shape[1]
+        if old_in_channels != N_CHANNELS:
+            # The checkpoint was trained with a different input-channel
+            # count than perception.input_tensor's CURRENT channel list
+            # (e.g. loading a 9-channel checkpoint after adding the
+            # normal/curvature channels) -- grow the stem conv rather
+            # than discarding the old channels' trained weights. See
+            # perception.segnet.expand_stem_conv_for_checkpoint's own
+            # docstring for exactly what this does and does not do.
+            print(
+                f"Checkpoint stem conv has {old_in_channels} input channels; current "
+                f"input_tensor.N_CHANNELS is {N_CHANNELS} -- expanding the stem conv "
+                f"(old channels' weights preserved, new channels zero-initialised)."
+            )
+            init_state = expand_stem_conv_for_checkpoint(init_state, N_CHANNELS)
+        model.load_state_dict(init_state)
         print(f"Initialised model weights from {init_from_checkpoint} (fresh optimizer/scheduler/epoch count)")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
@@ -377,7 +509,7 @@ def train(
         print("Class weights (secondary CE term only, mean-normalised inverse-sqrt-frequency):")
         for c, w in enumerate(class_weight.tolist()):
             print(f"  class {c}: {w:.3f}")
-    loss_fn = DrishtiSegLoss(class_weight=class_weight).to(device)
+    loss_fn = DrishtiSegLoss(class_weight=class_weight, focal_gamma=focal_gamma).to(device)
 
     start_epoch = load_checkpoint_if_exists(ckpt_path, model, optimizer, scheduler, scaler, device)
     if start_epoch > 0:
@@ -528,6 +660,20 @@ if __name__ == "__main__":
         action="store_true",
         help="Disable inverse-sqrt-frequency class weighting on the secondary CE term (on by default).",
     )
+    parser.add_argument(
+        "--focal-gamma",
+        type=float,
+        default=None,
+        help="Enable focal loss (perception.losses.focal_loss) as an additional loss term with this "
+             "gamma (typical: 2.0). Off by default (None) -- byte-identical to the pre-focal-loss "
+             "behaviour when omitted.",
+    )
+    parser.add_argument(
+        "--cutmix-clusters",
+        default=None,
+        help="Path to a .npz produced by eval/extract_rare_clusters.py -- enables CutMix pasting of "
+             "real class-4 (STATIC_OBSTACLE) point clusters into training frames. Off by default.",
+    )
     args = parser.parse_args()
 
     train(
@@ -536,6 +682,8 @@ if __name__ == "__main__":
         out_dir=args.out_dir,
         init_from_checkpoint=args.init_from_checkpoint,
         use_class_weights=not args.no_class_weights,
+        focal_gamma=args.focal_gamma,
+        cutmix_clusters_path=args.cutmix_clusters,
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
