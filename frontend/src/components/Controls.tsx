@@ -77,6 +77,20 @@ function WipeIcon() {
     </svg>
   )
 }
+function RealDataIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4">
+      <circle cx="3" cy="3.5" r="1" fill="currentColor" stroke="none" />
+      <circle cx="7.5" cy="2" r="1" fill="currentColor" stroke="none" />
+      <circle cx="11" cy="4.5" r="1" fill="currentColor" stroke="none" />
+      <circle cx="4.5" cy="7" r="1" fill="currentColor" stroke="none" />
+      <circle cx="9" cy="7.5" r="1" fill="currentColor" stroke="none" />
+      <circle cx="2.5" cy="10.5" r="1" fill="currentColor" stroke="none" />
+      <circle cx="7" cy="11" r="1" fill="currentColor" stroke="none" />
+      <circle cx="11" cy="10" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  )
+}
 
 export function Timeline({ frameCount }: { frameCount: number }) {
   const frameIndex = useDashboardStore((s) => s.frameIndex)
@@ -185,6 +199,20 @@ export function CompareWipeToggle() {
   return (
     <IconButton onClick={toggleCompareWipe} active={compareWipe} label="Toggle 2D-vs-DRISHTI reveal comparison">
       <WipeIcon />
+    </IconButton>
+  )
+}
+
+export function RealDataToggle() {
+  const realDataMode = useDashboardStore((s) => s.realDataMode)
+  const toggleRealDataMode = useDashboardStore((s) => s.toggleRealDataMode)
+  return (
+    <IconButton
+      onClick={toggleRealDataMode}
+      active={realDataMode}
+      label="Toggle real RELLIS-3D + real FusionSegNet data view"
+    >
+      <RealDataIcon />
     </IconButton>
   )
 }

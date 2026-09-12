@@ -5,10 +5,11 @@
  */
 
 import { AnimatePresence, motion } from "motion/react"
-import { CompareWipeToggle, GammaSlider, SplitScreenToggle, Timeline } from "./components/Controls"
+import { CompareWipeToggle, GammaSlider, RealDataToggle, SplitScreenToggle, Timeline } from "./components/Controls"
 import { ComparisonWipe } from "./components/ComparisonWipe"
 import { GovernorPanel } from "./components/GovernorPanel"
 import { HUD } from "./components/HUD"
+import { RealScene } from "./components/RealScene"
 import { Scene } from "./components/Scene"
 import { SpeedGauge } from "./components/SpeedGauge"
 import { SplitScreen } from "./components/SplitScreen"
@@ -33,6 +34,7 @@ export default function App() {
   const frameIndex = useDashboardStore((s) => s.frameIndex)
   const splitScreen = useDashboardStore((s) => s.splitScreen)
   const compareWipe = useDashboardStore((s) => s.compareWipe)
+  const realDataMode = useDashboardStore((s) => s.realDataMode)
   const frame = DEMO_SEQUENCE[frameIndex]
 
   return (
@@ -42,7 +44,7 @@ export default function App() {
       <div className="flex-1 flex min-h-0">
         <div className="relative flex-1 min-w-0">
           <AnimatePresence mode="wait">
-            {compareWipe ? (
+            {realDataMode ? null : compareWipe ? (
               <motion.div
                 key="wipe"
                 className="absolute inset-0"
@@ -77,6 +79,11 @@ export default function App() {
               </motion.div>
             )}
           </AnimatePresence>
+          {realDataMode && (
+            <div className="absolute inset-0">
+              <RealScene />
+            </div>
+          )}
         </div>
 
         <div className="w-72 shrink-0 border-l border-white/8 bg-black/20 p-3 overflow-y-auto flex flex-col gap-3">
@@ -93,6 +100,7 @@ export default function App() {
         <div className="w-px h-6 bg-white/10" />
         <SplitScreenToggle />
         <CompareWipeToggle />
+        <RealDataToggle />
       </div>
     </div>
   )

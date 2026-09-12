@@ -15,6 +15,7 @@ interface DashboardState {
   overlayMode: OverlayMode
   splitScreen: boolean
   compareWipe: boolean
+  realDataMode: boolean
   gamma: number
   egoSpeedMs: number
 
@@ -25,6 +26,7 @@ interface DashboardState {
   setOverlayMode: (m: OverlayMode) => void
   toggleSplitScreen: () => void
   toggleCompareWipe: () => void
+  toggleRealDataMode: () => void
   setGamma: (g: number) => void
   setEgoSpeedMs: (v: number) => void
 }
@@ -37,6 +39,7 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   overlayMode: "class",
   splitScreen: false,
   compareWipe: false,
+  realDataMode: false,
   gamma: 1.0,
   egoSpeedMs: 15,
 
@@ -48,6 +51,7 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   setOverlayMode: (m) => set({ overlayMode: m }),
   toggleSplitScreen: () => set((s) => ({ splitScreen: !s.splitScreen, compareWipe: false })),
   toggleCompareWipe: () => set((s) => ({ compareWipe: !s.compareWipe, splitScreen: false })),
+  toggleRealDataMode: () => set((s) => ({ realDataMode: !s.realDataMode })),
   setGamma: (g) => set({ gamma: g }),
   setEgoSpeedMs: (v) => set({ egoSpeedMs: v }),
 }))
