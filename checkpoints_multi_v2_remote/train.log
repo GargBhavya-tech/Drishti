@@ -121,3 +121,39 @@ Epoch 7: val loss=0.3433 val mIoU=0.5418 lr=2.85e-04
   class 7 IoU: 0.7525663864183654
   class 8 IoU: n/a (no pixels)
   class 9 IoU: n/a (no pixels)
+Epoch 8/19: train loss=0.4042 (1092.5s, 2880 batches) -- avg 1068.6s/epoch, ETA 195.9 min (11 epochs left)
+Epoch 8: val loss=0.3308 val mIoU=0.5513 lr=2.67e-04
+  class 0 IoU: 0.7660271252214761
+  class 1 IoU: 0.8516856733345797
+  class 2 IoU: 0.16420317218372812
+  class 3 IoU: 0.4065997175097397
+  class 4 IoU: 0.0
+  class 5 IoU: 0.94859249077355
+  class 6 IoU: 0.5343245808288516
+  class 7 IoU: 0.7390937469095725
+  class 8 IoU: n/a (no pixels)
+  class 9 IoU: n/a (no pixels)
+Epoch 9/19: train loss=0.3982 (1033.7s, 2880 batches) -- avg 1065.1s/epoch, ETA 177.5 min (10 epochs left)
+Epoch 9: val loss=0.3428 val mIoU=0.5440 lr=2.44e-04
+  class 0 IoU: 0.7760613192487663
+  class 1 IoU: 0.8588296945739253
+  class 2 IoU: 0.161278083011478
+  class 3 IoU: 0.3757494680076801
+  class 4 IoU: 0.0
+  class 5 IoU: 0.9622612846433704
+  class 6 IoU: 0.47273481235745385
+  class 7 IoU: 0.7452228388509072
+  class 8 IoU: n/a (no pixels)
+  class 9 IoU: n/a (no pixels)
+Epoch 10/19: train loss=0.3876 (1117.9s, 2880 batches) -- avg 1069.9s/epoch, ETA 160.5 min (9 epochs left)
+Epoch 10: val loss=0.3358 val mIoU=0.5665 lr=2.15e-04
+  class 0 IoU: 0.7859198998748436
+  class 1 IoU: 0.8603238272363365
+  class 2 IoU: 0.17185544898440008
+  class 3 IoU: 0.4520961580167826
+  class 4 IoU: 0.0
+  class 5 IoU: 0.9611166296260246
+  class 6 IoU: 0.5243614351099956
+  class 7 IoU: 0.7765674978079112
+  class 8 IoU: n/a (no pixels)
+  class 9 IoU: n/a (no pixels)

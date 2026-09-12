@@ -61,7 +61,23 @@ After the four items in 0a-6, the user asked for a critical assessment of five m
 
 All new Python tests pass (40/40 across the four new/changed test files, verified in one run). Nothing in this addendum has been wired into a real ROS 2 environment or a real GPU attention-overlay run -- those remain exactly the open items 0b/0d already listed.
 
-### 0f. Everything below this point (sections 1-9) is SESSION 2's own handoff, covering Phases 0-4 in detail — still accurate for that scope, just stale on "what's done" (see the correction at the top of this file).
+### 0g. SESSION 3, PART 3 -- real-data frontend rework (IN PROGRESS, not finished)
+
+User called the mock-data frontend "very bad" and asked for a full rework with real data. Researched OSS options (Potree/deck.gl rejected as overkill for our point count; adopted: custom shader points, CPU-side instanced terrain, GPU fragment-shader variable-res grid). Built and VERIFIED WORKING in-browser (screenshot confirmed real vegetation geometry + visible resolution ring, zero console errors):
+
+1. **`eval/export_frames.py`** (new) -- exports REAL RELLIS-3D points + REAL FusionSegNet predictions, binned into the REAL Nyquist schedule (`sensor.schedule.generate_schedule`), as raw `Float32Array` binaries (`points_{i}.bin`: x,y,z,classId; `cells_{i}.bin`: level,gx,gy,heightM,classId) + `manifest.json`. Explicit scope note in its own docstring: single-sweep snapshots, NOT a live temporally-accumulated clipmap. Run locally (CPU is fine for visualization, unlike accuracy evidence) — 24 frames exported to `frontend/public/data/` (~51MB).
+2. **Frontend**: `lib/realData.ts` (loader), `lib/realScale.ts` (REAL_WORLD_SCALE=0.15, separate from mock's CELL_WORLD_SIZE), `components/RealPointCloud.tsx` (custom ShaderMaterial points, pre-allocated buffer + setDrawRange, no per-frame GC churn), `components/RealTerrain.tsx` (one InstancedMesh per real resolution level -- 4 tiers simultaneously visible for the first time), `components/VariableResGrid.tsx` (single fullscreen-shader plane, GPU-only distance-based grid lines using the real schedule -- the PS's own headline feature, finally visible), `components/RealScene.tsx` (assembles all three + `@react-three/postprocessing` Bloom + ACES tone mapping, own self-contained playback bar, NOT wired into the shared frameIndex store -- independent timeline from the mock's 48 frames).
+3. New `realDataMode` toggle in `store.ts`/`Controls.tsx`/`App.tsx` (a new icon button in the control strip) -- switches the main view between the mock demo and this real view. **Debugging note for next session**: an early version put the real-view branch INSIDE the same `AnimatePresence mode="wait"` block as the three mock branches and it silently never mounted (exit animation appeared to stall) -- fixed by rendering it as a plain sibling `{realDataMode && <RealScene/>}` placed AFTER (not before) the `AnimatePresence` block in JSX so DOM stacking order puts it on top. If this toggle ever breaks again, check that ordering first.
+4. Had to `npm install @react-three/postprocessing postprocessing --legacy-peer-deps` (the second package is a peer dep that isn't auto-installed) and clear/restart the dev server (`node_modules/.vite` cache + a fresh `preview_start`, not just a page reload) after installing -- a stale Vite optimize-deps cache from before the install caused a persistent 500 that a plain page navigate did NOT clear; killing the old server process and using a genuinely fresh browser tab did.
+
+**NOT done yet** (stopped here for session-length/cost reasons, not scope-completion):
+- The old wow-factor overlays (path planner, gaze beam, friction governor panel, comparison wipe, attention overlay) are still wired to MOCK data only -- they do not yet run against the real view.
+- No smooth-displaced-mesh terrain (current terrain is instanced boxes per real cell, same technique as the old mock CellField, just now real + 4 real resolution tiers instead of 1 synthetic one) -- a reasonable, documented simplification, not the full triplanar/normal-computed mesh from the research.
+- No OpenMCT "Darkmatter" UI pass (glow effects, gradient audit) done yet.
+- No re-export with a real GPU-run checkpoint (this export used local CPU inference -- fine for visualization, since geometry/class labels are still real, just not the MOST accurate available; a GPU re-run with `checkpoints_multi_v2`'s eventual best checkpoint would be a natural upgrade once that fine-tune finishes).
+- `ui-demo` skill (Playwright demo video recording) not yet used.
+
+### 0h. Everything below this point (sections 1-9) is SESSION 2's own handoff, covering Phases 0-4 in detail — still accurate for that scope, just stale on "what's done" (see the correction at the top of this file).
 
 ---
 
