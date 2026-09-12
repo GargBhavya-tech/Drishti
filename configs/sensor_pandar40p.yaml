@@ -1,0 +1,51 @@
+# Hesai Pandar40P -- SemanticPOSS's sensor (Peking University campus
+# dataset, real download confirmed this session: 6 sequences, ~2,988
+# scans, sequences/XX/{velodyne,labels}, KITTI-format .bin/.label).
+#
+# n_beams and the vertical-FOV figures below come from REAL MEASURED
+# data (elevation angle percentiles computed over sampled real frames
+# across sequences 00/01/02, and h_m from the median z of real
+# ground-classified points, label id 22 per the dataset's own
+# read_data.py), not Hesai's published spec sheet -- the real observed
+# elevation span (-15.5..+7.3 deg, ~22.8 deg) is narrower than the
+# datasheet's headline figure (-25..+15 deg, 40 deg), which is the
+# sensor's maximum mechanical range, not what real ground+object
+# returns in this dataset actually populate. Same "measure from real
+# data, don't trust the spec sheet" discipline as
+# sensor_ouster_os1_64.yaml's own d_theta_deg/vertical-FOV entries.
+
+sensor_id: pandar40p
+
+n_beams: 40
+
+# Horizontal angular resolution: Hesai's commonly-cited spec-sheet
+# figure for Pandar40P at its standard 10Hz frame rate. NOT
+# independently re-measured against downloaded SemanticPOSS data
+# (unlike the vertical figures below, which are) -- flagged the same
+# way sensor_hdl32e.yaml flags h_m as an unverified placeholder.
+d_theta_deg: 0.2
+d_theta_rad: 0.0034906585039886591
+
+# Vertical spacing: a UNIFORM approximation of the REAL measured
+# elevation span below (22.839 deg across 40 beams = 39 gaps). The
+# Pandar40P's real per-channel spacing is NOT uniform (denser in the
+# mid-FOV per Hesai's public channel table) -- this is a documented
+# simplification, not a measured per-beam table.
+d_phi_deg: 0.5856154
+d_phi_rad: 0.010223347
+
+phi_max_deg: 7.3   # REAL measured: 99.9th-percentile elevation angle, sampled across sequences 00/01/02
+
+# REAL measured: median z of ground-classified points (label id 22,
+# "ground", per the dataset's own read_data.py LABEL_DICT), across 10
+# sampled frames of sequence 00, negated (ground sits below the sensor
+# origin in sensor-frame coordinates). Same derivation method used for
+# sensor_ouster_os1_64.yaml's own h_m.
+h_m: 1.988
+
+# NOT independently measured -- same placeholder-style figure as
+# sensor_hdl32e.yaml's usable_range_m, pending a real max-return-range
+# check against downloaded data.
+usable_range_m: 70.0
+
+beam_elevations: null
