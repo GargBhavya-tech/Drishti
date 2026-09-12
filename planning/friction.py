@@ -34,7 +34,7 @@ see Wong 2001 below), not measured on this specific vehicle:
   - DRIVABLE (dry compacted dirt/gravel): mu = 0.18-0.40. Loose granular
     material on hardpack prevents the tire rubber from achieving full
     hysteresis/adhesion. [Wong 2001; Samuelraj et al. 2018]
-  - VEGETATION (wet grass/vegetation litter): mu = 0.10-0.20, EXTRAPOLATED
+  - VEGETATION (wet grass/vegetation litter): mu = 0.10-0.2, EXTRAPOLATED
     from documented 55-81% friction reduction under ice/snow relative to
     dry surfaces (no wet-grass-specific wheeled-UGV braking study was
     found; this is the best-available proxy for a wet, lubricating
@@ -57,8 +57,10 @@ Sources:
     Research Board.
 
 CROSS-CHECK against this project's own declared platform parameter:
-`vehicle_ugv.yaml`'s `braking_a_ms2 = 4.0` implies mu = a/g = 4.0/9.81
-~= 0.408 under the simplified friction-limited-braking model -- landing
+`vehicle_ugv.yaml`'s own declared `braking_a_ms2` (see that file, not
+restated here as a literal, to avoid this comment silently going stale
+if it is ever retuned) implies mu = a/g ~= 0.408 under the simplified
+friction-limited-braking model -- landing
 almost exactly at the TOP of the cited dry-dirt/gravel range above, a
 reassuring consistency check that the pre-existing config's own
 assumption was reasonable, not just re-derived from scratch. Treat
@@ -80,7 +82,7 @@ from sensor.vehicle_config import VehicleConfig
 
 # Top of the cited dry-compacted-dirt/gravel range (Wong 2001; Samuelraj
 # et al. 2018) -- also almost exactly what vehicle_ugv.yaml's own
-# braking_a_ms2=4.0 already implies (mu ~= 0.408). See module docstring.
+# declared braking_a_ms2 already implies (mu ~= 0.408). See module docstring.
 MU_DRY_REFERENCE = 0.40
 
 CLASS_TO_MU: Dict[DrishtiClass, float] = {

@@ -113,7 +113,7 @@ def curvature_radius(p0: Tuple[float, float], p1: Tuple[float, float], p2: Tuple
     area = abs((p1[0] - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (p1[1] - p0[1])) / 2.0
     if area < 1e-9:
         return math.inf
-    return (a * b * c) / (4.0 * area)
+    return (a * b * c) / (4 * area)
 
 
 def lateral_speed_limit_ms(radius_m: float, mu: float, g_ms2: float = G_MS2) -> float:
