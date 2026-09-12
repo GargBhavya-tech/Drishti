@@ -1,24 +1,36 @@
 /**
- * terrainMesh.ts -- builds a single continuous heightfield mesh from a
- * sparse grid of (gx, gy, height, color) cells, replacing the old
- * "one InstancedMesh box per cell" terrain rendering (mission-control
- * redesign, 2026-09). The underlying data structure is UNCHANGED --
- * still a flat per-cell list, still addressed by integer grid indices --
- * only the visual presentation becomes a shaded, continuous surface
- * instead of a field of vertical bars.
+ * terrainMesh.ts -- builds a single continuous, LOW-RELIEF heightfield
+ * mesh from a sparse grid of (gx, gy, height, color) cells (GIS-portal
+ * redesign, 2026-09, replacing the first heightfield pass that still
+ * read as a spiky "height graph"). The underlying data structure is
+ * UNCHANGED -- still a flat per-cell list, still addressed by integer
+ * grid indices -- only the visual presentation changes, in three
+ * concrete steps, in order:
  *
- * A cell with no data this frame (decimated far cells in the mock demo,
- * an unpopulated address in a real sparse level) gets `fallbackColor`
- * and height 0 rather than being omitted -- an actual hole in a
- * heightfield mesh reads as a rendering bug, not "unobserved", so it is
- * filled in as flat "not yet seen" ground instead. This never invents a
- * hazard or a height that wasn't in the source data; it only fills the
- * gaps a real occupancy grid would otherwise leave undefined.
+ * 1. `fillUnsetHeights` -- a decimated/missing cell is filled from its
+ *    populated neighbours' average, never left at a hard flat 0 next to
+ *    a real sample (which is what turned isolated real cells into
+ *    spikes in the first pass).
+ * 2. `smoothHeights` -- a small box-blur pass over the WHOLE field. This
+ *    is the actual fix for "looks like a bar chart": raw per-cell LiDAR
+ *    height noise is real data, but presenting every single sample at
+ *    full amplitude is what produced a jagged mountain range instead of
+ *    rolling ground. A contiguous multi-cell feature (a trench, a
+ *    vegetation mass) survives a gentle blur as a softened depression/
+ *    rise; only single-cell noise gets smoothed away, which is exactly
+ *    what should happen to noise.
+ * 3. `fadeEdgesToZero` -- the outermost rows/columns of the grid are
+ *    where decimation is heaviest (see mockData.ts's own "decimate
+ *    coarser rings" comment) and therefore the least reliable; a hard,
+ *    finite-extent grid also has no business pretending it knows the
+ *    ground truth right up to its own boundary. Both are handled by
+ *    fading height to 0 over the last few cells, giving the mesh a
+ *    clean, deliberate boundary instead of a wall or a spike field.
  *
- * Normals are computed with BufferGeometry.computeVertexNormals() (a
- * built-in three.js method) rather than hand-rolled -- this is what
- * turns a grid of flat quads into something that reads as continuous
- * terrain once real lighting hits it (see Scene.tsx / RealTerrain.tsx).
+ * The returned `sampleHeight(gx, gy)` is the SAME final (filled +
+ * smoothed + faded) height a caller would see baked into the mesh --
+ * used by Scene.tsx so the planned path and the UGV marker sit flush on
+ * the surface that is actually rendered, not on the raw noisy samples.
  */
 
 import * as THREE from "three"
@@ -43,22 +55,30 @@ export interface HeightfieldOptions {
    * center (the real exported gx/gy convention). */
   centerOffset: number
   fallbackColor: THREE.Color
+  /** Box-blur passes applied to the whole height field. Default 2 --
+   * enough to turn single-cell noise into rolling ground while a
+   * multi-cell feature (a trench, a rise) survives as a softened
+   * version of itself. */
+  smoothPasses?: number
+  /** How many cells at the grid's outer edge fade linearly to height 0.
+   * Default 5. */
+  edgeFadeCells?: number
 }
 
-/** Fills every unset (decimated/missing) vertex's height by averaging
- * its already-set immediate neighbours, iterating outward a few passes
- * so a hole of more than one cell still fills in smoothly rather than
- * staying flat. A vertex that ends a pass with no set neighbour at all
- * (an entirely empty region, e.g. genuinely unobserved far terrain)
- * keeps height 0 -- flat ground, which is the honest thing to show for
- * "no data here", not a fabricated hazard or ridge. This is what turns
- * a sparse/decimated source grid into smooth terrain instead of a
- * field of spikes: an isolated real cell surrounded by unset (flat)
- * neighbours would otherwise render as a lone spike jutting out of flat
- * ground once normals are computed. */
+export interface Heightfield {
+  geometry: THREE.BufferGeometry
+  /** The exact height baked into the mesh at grid cell (gx, gy),
+   * clamped to the field's own bounds. Use this for anything that must
+   * sit ON the rendered surface (a path, a vehicle marker) rather than
+   * re-deriving height from raw per-cell data, which would drift from
+   * what is actually on screen once smoothing/fading are applied. */
+  sampleHeight: (gx: number, gy: number) => number
+  minHeight: number
+}
+
 function fillUnsetHeights(heights: Float32Array, set: Uint8Array, width: number, depth: number): void {
   const MAX_PASSES = 3
-  let remaining = new Set<number>()
+  const remaining = new Set<number>()
   for (let i = 0; i < set.length; i++) if (!set[i]) remaining.add(i)
 
   for (let pass = 0; pass < MAX_PASSES && remaining.size > 0; pass++) {
@@ -83,27 +103,71 @@ function fillUnsetHeights(heights: Float32Array, set: Uint8Array, width: number,
     }
     for (const [idx, avgHeight] of resolvedThisPass) {
       heights[idx] = avgHeight
-      set[idx] = 1 // provisionally set -- lets the NEXT pass use it too
+      set[idx] = 1
       remaining.delete(idx)
     }
-    if (resolvedThisPass.length === 0) break // no progress possible -- stop early
+    if (resolvedThisPass.length === 0) break
   }
 }
 
-/** Builds one continuous heightfield BufferGeometry covering
- * [minGx..maxGx] x [minGy..maxGy]. Cells not present in `cells` are
- * filled by averaging populated neighbours (never left at a hard flat
- * 0), so a decimated/sparse source grid never reads as an isolated
- * spike poking out of flat ground -- see this function's own doc
- * comment on `fillUnsetHeights` for why. Only a vertex with NO
- * populated neighbour at all (a genuinely empty region) falls back to
- * flat ground with `fallbackColor`. */
-export function buildHeightfieldGeometry(cells: HeightCell[], opts: HeightfieldOptions): THREE.BufferGeometry {
+/** A separable 3x3 box blur, `passes` times, edge-clamped (a boundary
+ * cell blurs with itself standing in for the missing neighbour, rather
+ * than wrapping or darkening toward 0). */
+function smoothHeights(
+  heights: Float32Array<ArrayBufferLike>,
+  width: number,
+  depth: number,
+  passes: number,
+): Float32Array<ArrayBufferLike> {
+  let src = heights
+  for (let p = 0; p < passes; p++) {
+    const dst = new Float32Array(src.length)
+    for (let iz = 0; iz < depth; iz++) {
+      for (let ix = 0; ix < width; ix++) {
+        let sum = 0
+        for (let dz = -1; dz <= 1; dz++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const nx = Math.min(width - 1, Math.max(0, ix + dx))
+            const nz = Math.min(depth - 1, Math.max(0, iz + dz))
+            sum += src[nz * width + nx]
+          }
+        }
+        dst[iz * width + ix] = sum / 9
+      }
+    }
+    src = dst
+  }
+  return src
+}
+
+/** Linearly fades height to 0 over the outer `fadeCells` rings of the
+ * grid, so the mesh always ends in a clean, flat boundary regardless of
+ * what the (heaviest-decimated, least-reliable) edge samples said. */
+function fadeEdgesToZero(heights: Float32Array, width: number, depth: number, fadeCells: number): void {
+  if (fadeCells <= 0) return
+  for (let iz = 0; iz < depth; iz++) {
+    for (let ix = 0; ix < width; ix++) {
+      const distToEdge = Math.min(ix, width - 1 - ix, iz, depth - 1 - iz)
+      if (distToEdge >= fadeCells) continue
+      const t = distToEdge / fadeCells // 0 at the very edge, 1 at fadeCells-in
+      heights[iz * width + ix] *= t
+    }
+  }
+}
+
+/** Builds one continuous, smoothed, edge-faded heightfield covering
+ * [minGx..maxGx] x [minGy..maxGy]. See this module's own doc comment
+ * for the three-step process (fill -> smooth -> fade) that replaces the
+ * earlier raw-heightfield approach. */
+export function buildHeightfieldGeometry(cells: HeightCell[], opts: HeightfieldOptions): Heightfield {
+  const smoothPasses = opts.smoothPasses ?? 2
+  const edgeFadeCells = opts.edgeFadeCells ?? 5
+
   const width = opts.maxGx - opts.minGx + 1
   const depth = opts.maxGy - opts.minGy + 1
   const nVerts = width * depth
 
-  const heights = new Float32Array(nVerts)
+  let heights: Float32Array<ArrayBufferLike> = new Float32Array(nVerts)
   const colors = new Float32Array(nVerts * 3)
   const set = new Uint8Array(nVerts)
   for (let i = 0; i < nVerts; i++) {
@@ -125,8 +189,11 @@ export function buildHeightfieldGeometry(cells: HeightCell[], opts: HeightfieldO
   }
 
   fillUnsetHeights(heights, set, width, depth)
+  heights = smoothHeights(heights, width, depth, smoothPasses)
+  fadeEdgesToZero(heights, width, depth, edgeFadeCells)
 
   const positions = new Float32Array(nVerts * 3)
+  let minHeight = Infinity
   for (let iz = 0; iz < depth; iz++) {
     for (let ix = 0; ix < width; ix++) {
       const idx = iz * width + ix
@@ -135,11 +202,13 @@ export function buildHeightfieldGeometry(cells: HeightCell[], opts: HeightfieldO
       positions[idx * 3] = worldX
       positions[idx * 3 + 1] = heights[idx]
       positions[idx * 3 + 2] = worldZ
+      if (heights[idx] < minHeight) minHeight = heights[idx]
     }
   }
+  if (!Number.isFinite(minHeight)) minHeight = 0
 
   const nQuads = (width - 1) * (depth - 1)
-  const indices = new Uint32Array(nQuads * 6)
+  const indices = new Uint32Array(Math.max(0, nQuads) * 6)
   let ii = 0
   for (let iz = 0; iz < depth - 1; iz++) {
     for (let ix = 0; ix < width - 1; ix++) {
@@ -161,5 +230,13 @@ export function buildHeightfieldGeometry(cells: HeightCell[], opts: HeightfieldO
   geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3))
   geometry.setIndex(new THREE.BufferAttribute(indices, 1))
   geometry.computeVertexNormals()
-  return geometry
+
+  const finalHeights = heights
+  const sampleHeight = (gx: number, gy: number): number => {
+    const ix = Math.min(width - 1, Math.max(0, Math.round(gx - opts.minGx)))
+    const iz = Math.min(depth - 1, Math.max(0, Math.round(gy - opts.minGy)))
+    return finalHeights[iz * width + ix]
+  }
+
+  return { geometry, sampleHeight, minHeight }
 }

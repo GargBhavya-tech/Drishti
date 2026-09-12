@@ -118,6 +118,22 @@ export const CLASS_COLOR: Record<DrishtiClassId, string> = {
   9: "#6E6478", // OVERHANG -- muted violet-grey (overhead, distinct from ground obstacle)
 }
 
+const NEGATIVE_OBSTACLE_CLASS_ID = 8
+
+/** The terrain MESH's own fill colour -- identical to CLASS_COLOR
+ * except the negative-obstacle class renders as muted ground, not the
+ * saturated hazard accent. The hazard itself is communicated by the
+ * actual depression in the geometry plus a boundary ring/label (see
+ * Scene.tsx's HazardMarker); painting the whole trench region solid red
+ * on the terrain surface is exactly the "giant red box" the GIS-portal
+ * redesign rules out. CLASS_COLOR itself (hazard red at index 8) stays
+ * the source of truth for the legend swatch and the marker -- only the
+ * terrain mesh's own fill decouples from it here. */
+export function terrainFillColor(classId: number): string {
+  if (classId === NEGATIVE_OBSTACLE_CLASS_ID) return CLASS_COLOR[3] // NON_TRAVERSABLE's muted stone tone -- disturbed ground, not a warning colour
+  return CLASS_COLOR[classId] ?? "#5b6472"
+}
+
 export const OBSERVABILITY_COLOR = {
   UNOBSERVED: "#1b212c",
   FREE: "#1f6f5c33",

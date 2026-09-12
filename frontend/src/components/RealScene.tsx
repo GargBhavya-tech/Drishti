@@ -154,7 +154,7 @@ export function RealScene() {
     <div className="relative w-full h-full">
       <Canvas
         shadows={false}
-        camera={{ position: [8, 7, 8], fov: 45 }}
+        camera={{ position: [5, 14, 5], fov: 36 }}
         dpr={[1, 1.75]}
         gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.2 }}
       >
@@ -169,7 +169,14 @@ export function RealScene() {
         <RealPointCloud frame={frame} />
         <RealVehicleMarker />
 
-        <OrbitControls enableDamping dampingFactor={0.08} minDistance={2} maxDistance={35} maxPolarAngle={Math.PI / 2.05} />
+        <OrbitControls
+          enableDamping
+          dampingFactor={0.08}
+          minDistance={6}
+          maxDistance={22}
+          minPolarAngle={0.26}
+          maxPolarAngle={0.55}
+        />
 
         <EffectComposer multisampling={0}>
           <Bloom luminanceThreshold={0.7} luminanceSmoothing={0.2} intensity={0.35} mipmapBlur />

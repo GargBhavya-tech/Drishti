@@ -43,10 +43,19 @@ export function UgvModel() {
       </mesh>
 
       {/* Upper deck -- a narrower block stepped in from the skirt,
-          faking a beveled chassis without needing rounded geometry. */}
+          faking a beveled chassis without needing rounded geometry.
+          Lighter than the skirt so the vehicle reads clearly from
+          above against dark terrain, not as a flat black silhouette. */}
       <mesh position={[-0.02, 0.145, 0]} castShadow receiveShadow>
         <boxGeometry args={[0.3, 0.05, 0.22]} />
-        <meshStandardMaterial color={VEHICLE_COLOR.dark} roughness={0.7} metalness={0.05} />
+        <meshStandardMaterial color={VEHICLE_COLOR.highlight} roughness={0.6} metalness={0.05} />
+      </mesh>
+
+      {/* Front marker -- a small light strip at the nose, reinforcing
+          front/back orientation beyond just the heading dot. */}
+      <mesh position={[0.2, 0.075, 0]} castShadow>
+        <boxGeometry args={[0.02, 0.07, 0.24]} />
+        <meshStandardMaterial color={VEHICLE_COLOR.highlight} roughness={0.5} metalness={0.05} />
       </mesh>
 
       {/* Raised sensor/LiDAR mast, slightly forward of centre. */}

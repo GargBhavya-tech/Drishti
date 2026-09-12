@@ -53,7 +53,7 @@ const FRAGMENT_SHADER = `
     // Nyquist radius (mission-control redesign's own grid spec).
     vec3 gridColor = vec3(0.325, 0.376, 0.407);
     float distFade = 1.0 - clamp(r / radii[${MAX_LEVELS - 1}], 0.0, 1.0);
-    gl_FragColor = vec4(gridColor, line * 0.11 * distFade);
+    gl_FragColor = vec4(gridColor, line * 0.05 * distFade);
   }
 `
 

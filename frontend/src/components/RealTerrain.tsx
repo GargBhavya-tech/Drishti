@@ -22,13 +22,17 @@ import * as THREE from "three"
 import type { LevelInfo, RealFrame } from "../lib/realData"
 import { REAL_WORLD_SCALE } from "../lib/realScale"
 import { buildHeightfieldGeometry } from "../lib/terrainMesh"
-import { CLASS_COLOR } from "../lib/theme"
+import { CLASS_COLOR, terrainFillColor } from "../lib/theme"
 
-const HEIGHT_EXAGGERATION = 2.5
+// Restrained -- GIS-portal redesign: real terrain relief should read as
+// gentle rolling ground, not an exaggerated mountain range. A meaningful
+// feature (the trench) still reads clearly at this scale; raw per-point
+// noise does not dominate the view.
+const HEIGHT_EXAGGERATION = 1.3
 const UNKNOWN_COLOR = new THREE.Color(CLASS_COLOR[0])
 
 function LevelField({ frame, level, levelInfo }: { frame: RealFrame; level: number; levelInfo: LevelInfo }) {
-  const geometry = useMemo(() => {
+  const { geometry } = useMemo(() => {
     const cellWorldSize = levelInfo.cellSizeM * REAL_WORLD_SCALE
     const cells: { gx: number; gy: number; height: number; color: THREE.Color }[] = []
     let minGx = Infinity
@@ -54,7 +58,7 @@ function LevelField({ frame, level, levelInfo }: { frame: RealFrame; level: numb
         gx,
         gy,
         height: heightM * REAL_WORLD_SCALE * HEIGHT_EXAGGERATION,
-        color: new THREE.Color(CLASS_COLOR[classId] ?? "#5b6472"),
+        color: new THREE.Color(terrainFillColor(classId)),
       })
     }
 
