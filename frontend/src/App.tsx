@@ -9,23 +9,39 @@ import { CompareWipeToggle, GammaSlider, RealDataToggle, SplitScreenToggle, Time
 import { ComparisonWipe } from "./components/ComparisonWipe"
 import { GovernorPanel } from "./components/GovernorPanel"
 import { HUD } from "./components/HUD"
+import { Legend } from "./components/Legend"
+import { MissionStatus } from "./components/MissionStatus"
 import { RealScene } from "./components/RealScene"
 import { Scene } from "./components/Scene"
 import { SpeedGauge } from "./components/SpeedGauge"
 import { SplitScreen } from "./components/SplitScreen"
+import { SystemStatus } from "./components/SystemStatus"
 import { DEMO_SEQUENCE } from "./lib/mockData"
 import { motionTokens } from "./lib/theme"
 import { useDashboardStore } from "./state/store"
 
-function Header() {
+/** Header carries Level 1 of the information hierarchy -- the mission
+ * status is the single most prominent thing on screen, not the
+ * wordmark or the "synthetic demo" disclosure (both still present, just
+ * visually subordinate). See DRISHTI_Build_Map.md's own framing and the
+ * mission-control redesign brief's layout spec. */
+function Header({ frame }: { frame: (typeof DEMO_SEQUENCE)[number] }) {
   return (
-    <div className="flex items-center justify-between px-5 py-3 border-b border-white/8">
-      <div className="flex items-center gap-3">
-        <div className="h-2 w-2 rounded-full bg-cyan-400 shadow-[0_0_8px_2px_rgba(79,209,255,0.6)]" />
-        <span className="font-mono-tech text-sm tracking-[0.3em] text-slate-200">DRISHTI</span>
-        <span className="text-xs text-slate-500">adaptive variable-resolution 2.5D LiDAR mapping</span>
+    <div className="flex items-center justify-between gap-6 px-5 py-3 border-b border-white/8">
+      <div className="flex items-center gap-2.5 flex-none">
+        <div className="h-2 w-2 rounded-full bg-[#55D6E8] shadow-[0_0_8px_2px_rgba(85,214,232,0.5)]" />
+        <span className="font-mono-tech text-sm tracking-[0.25em] text-[#E7ECEE]">DRISHTI</span>
       </div>
-      <div className="text-[11px] text-slate-600 font-mono-tech">demo sequence -- synthetic, frontend-only</div>
+      <div className="flex-1 min-w-0">
+        <MissionStatus frame={frame} />
+      </div>
+      <div className="flex flex-col items-end gap-0.5 flex-none">
+        <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-widest text-[#55D6E8] font-medium">
+          <span className="h-1.5 w-1.5 rounded-full bg-[#55D6E8]" />
+          Operational
+        </div>
+        <div className="text-[10px] text-[#657278] font-mono-tech">synthetic demo sequence</div>
+      </div>
     </div>
   )
 }
@@ -38,8 +54,8 @@ export default function App() {
   const frame = DEMO_SEQUENCE[frameIndex]
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-[#05070c] text-slate-200">
-      <Header />
+    <div className="h-screen w-screen flex flex-col bg-[#080D12] text-[#E7ECEE]">
+      <Header frame={frame} />
 
       <div className="flex-1 flex min-h-0">
         <div className="relative flex-1 min-w-0">
@@ -87,9 +103,11 @@ export default function App() {
         </div>
 
         <div className="w-72 shrink-0 border-l border-white/8 bg-black/20 p-3 overflow-y-auto flex flex-col gap-3">
-          <HUD hud={frame.hud} frameIndex={frameIndex} frameCount={DEMO_SEQUENCE.length} />
+          <Legend />
+          <SystemStatus frame={frame} />
           <SpeedGauge envelope={frame.speedEnvelope} />
           <GovernorPanel frame={frame} />
+          <HUD hud={frame.hud} frameIndex={frameIndex} frameCount={DEMO_SEQUENCE.length} />
         </div>
       </div>
 

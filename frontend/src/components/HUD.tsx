@@ -45,12 +45,12 @@ function StatRow({ label, children }: { label: string; children: React.ReactNode
 }
 
 const OVERLAY_OPTIONS: { id: OverlayMode; label: string }[] = [
-  { id: "class", label: "Class colour" },
-  { id: "observability", label: "Observability" },
-  { id: "sparsity", label: "Sparsity verdict" },
-  { id: "height", label: "Height ramp" },
-  { id: "motion", label: "Motion cells" },
-  { id: "attention", label: "Attention / XAI (synthetic demo)" },
+  { id: "class", label: "Terrain type" },
+  { id: "observability", label: "Sensor coverage" },
+  { id: "sparsity", label: "Confidence" },
+  { id: "height", label: "Elevation" },
+  { id: "motion", label: "Moving objects" },
+  { id: "attention", label: "Model attention (synthetic demo)" },
 ]
 
 function OverlayToggle({ id, label }: { id: OverlayMode; label: string }) {
@@ -65,12 +65,12 @@ function OverlayToggle({ id, label }: { id: OverlayMode; label: string }) {
       {active && (
         <motion.span
           layoutId="overlay-active-pill"
-          className="absolute inset-0 bg-cyan-400/15 border border-cyan-400/40 rounded-md"
+          className="absolute inset-0 bg-[#55D6E8]/15 border border-[#55D6E8]/40 rounded-md"
           transition={{ duration: motionTokens.duration.fast, ease: motionTokens.easing.smooth }}
         />
       )}
       <span className="relative z-10 flex items-center gap-2">
-        <span className={`h-1.5 w-1.5 rounded-full ${active ? "bg-cyan-300" : "bg-slate-600"}`} />
+        <span className={`h-1.5 w-1.5 rounded-full ${active ? "bg-[#55D6E8]" : "bg-slate-600"}`} />
         {label}
       </span>
     </button>
@@ -93,12 +93,12 @@ export function HUD({ hud, frameIndex, frameCount }: { hud: HudStats; frameIndex
   return (
     <div className="flex flex-col gap-3">
       <motion.div
-        className="rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-md p-3"
+        className="panel-glass p-3"
         initial={{ opacity: 0, y: -motionTokens.distance.sm }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: motionTokens.duration.normal, ease: motionTokens.easing.smooth }}
       >
-        <div className="text-[11px] uppercase tracking-widest text-cyan-400/80 mb-2">Map status</div>
+        <div className="text-[11px] uppercase tracking-widest text-[#96A3A8] mb-2 font-medium">Engineering telemetry</div>
         <StatRow label="Frame">
           {frameIndex + 1} / {frameCount}
         </StatRow>
@@ -125,12 +125,12 @@ export function HUD({ hud, frameIndex, frameCount }: { hud: HudStats; frameIndex
       </motion.div>
 
       <motion.div
-        className="rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-md p-3"
+        className="panel-glass p-3"
         initial={{ opacity: 0, y: -motionTokens.distance.sm }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: motionTokens.duration.normal, ease: motionTokens.easing.smooth, delay: 0.05 }}
       >
-        <div className="text-[11px] uppercase tracking-widest text-cyan-400/80 mb-2">Overlay layer</div>
+        <div className="text-[11px] uppercase tracking-widest text-[#96A3A8] mb-2 font-medium">View layer</div>
         <div className="flex flex-col gap-1">
           {OVERLAY_OPTIONS.map((opt) => (
             <OverlayToggle key={opt.id} id={opt.id} label={opt.label} />

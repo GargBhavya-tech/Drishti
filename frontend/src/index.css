@@ -9,16 +9,28 @@ body,
 #root {
   height: 100%;
   margin: 0;
-  background: #05070c;
-  color: #cbd5e1;
-  font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: #080d12;
+  color: #e7ecee;
+  font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
 }
 
 .font-mono-tech {
-  font-family: "JetBrains Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
+  font-family: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
   font-variant-numeric: tabular-nums;
+}
+
+/* Shared "restrained glass" panel treatment -- industrial, not flashy:
+   see the mission-control redesign's own panel spec. Every HUD/telemetry
+   panel should use this instead of one-off Tailwind utility soup, so a
+   future palette change only needs to happen in one place. */
+.panel-glass {
+  background: rgba(13, 20, 27, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 9px;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
 }
 
 /* Thin, unobtrusive scrollbars for any overflowing panel content. */

@@ -183,13 +183,53 @@ export function GammaSlider() {
   )
 }
 
+/** Icon + visible label, never a bare icon alone -- mission-control
+ * redesign's own control-labeling rule: every control must be
+ * understandable without hovering. */
+function PillButton({
+  onClick,
+  active,
+  icon,
+  label,
+  title,
+}: {
+  onClick: () => void
+  active?: boolean
+  icon: React.ReactNode
+  label: string
+  title: string
+}) {
+  return (
+    <motion.button
+      onClick={onClick}
+      aria-label={title}
+      title={title}
+      whileHover={{ scale: 1.03 }}
+      whileTap={{ scale: 0.97 }}
+      transition={{ duration: motionTokens.duration.fast, ease: motionTokens.easing.sharp }}
+      className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-medium transition-colors ${
+        active
+          ? "border-[#55D6E8]/50 bg-[#55D6E8]/10 text-[#55D6E8]"
+          : "border-white/10 bg-white/5 text-[#96A3A8]"
+      }`}
+    >
+      {icon}
+      {label}
+    </motion.button>
+  )
+}
+
 export function SplitScreenToggle() {
   const splitScreen = useDashboardStore((s) => s.splitScreen)
   const toggleSplitScreen = useDashboardStore((s) => s.toggleSplitScreen)
   return (
-    <IconButton onClick={toggleSplitScreen} active={splitScreen} label="Toggle split-screen comparison">
-      <SplitIcon />
-    </IconButton>
+    <PillButton
+      onClick={toggleSplitScreen}
+      active={splitScreen}
+      icon={<SplitIcon />}
+      label="Split view"
+      title="Compare the uniform-grid baseline against the DRISHTI foveated map, side by side"
+    />
   )
 }
 
@@ -197,9 +237,13 @@ export function CompareWipeToggle() {
   const compareWipe = useDashboardStore((s) => s.compareWipe)
   const toggleCompareWipe = useDashboardStore((s) => s.toggleCompareWipe)
   return (
-    <IconButton onClick={toggleCompareWipe} active={compareWipe} label="Toggle 2D-vs-DRISHTI reveal comparison">
-      <WipeIcon />
-    </IconButton>
+    <PillButton
+      onClick={toggleCompareWipe}
+      active={compareWipe}
+      icon={<WipeIcon />}
+      label="Compare"
+      title="Drag to reveal: a naive 2D occupancy view vs. the real DRISHTI map"
+    />
   )
 }
 
@@ -207,12 +251,12 @@ export function RealDataToggle() {
   const realDataMode = useDashboardStore((s) => s.realDataMode)
   const toggleRealDataMode = useDashboardStore((s) => s.toggleRealDataMode)
   return (
-    <IconButton
+    <PillButton
       onClick={toggleRealDataMode}
       active={realDataMode}
-      label="Toggle real RELLIS-3D + real FusionSegNet data view"
-    >
-      <RealDataIcon />
-    </IconButton>
+      icon={<RealDataIcon />}
+      label="Live sensors"
+      title="Switch to real RELLIS-3D LiDAR + real FusionSegNet model output"
+    />
   )
 }

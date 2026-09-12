@@ -1,29 +1,31 @@
 /**
- * Scene.tsx -- the 3D map view. Cells are rendered as an InstancedMesh
- * (not one mesh per cell -- thousands of cells would tank performance
- * otherwise), colored by whichever overlay mode is active, with real
- * height exaggerated for visual legibility (true DRISHTI heights are
- * often sub-metre; a flat-looking terrain would defeat the point of a
- * 3D view).
+ * Scene.tsx -- the 3D map view. Terrain is rendered as ONE continuous
+ * heightfield mesh (terrainMesh.ts), not a field of vertical bars --
+ * mission-control redesign, 2026-09: a DRDO evaluator should read this
+ * as ground with relief, not a bar chart. Real height is still
+ * exaggerated for visual legibility (true DRISHTI heights are often
+ * sub-metre; a flat-looking terrain would defeat the point of a 3D
+ * view) -- only the geometry changed, not the underlying per-cell data.
  */
 
-import { Line, OrbitControls } from "@react-three/drei"
+import { Html, Line, OrbitControls } from "@react-three/drei"
 import { Canvas, useFrame } from "@react-three/fiber"
 import { useEffect, useMemo, useRef } from "react"
 import * as THREE from "three"
 import { findGazeTarget, foveaSampleGrid } from "../lib/foveaMath"
 import { gazeCandidatesFromFrame } from "../lib/mockData"
 import type { DemoFrame } from "../lib/mockData"
-import { classGridFromFrame, costGridFromFrame, findPath } from "../lib/pathPlanner"
-import { curvatureSpeedProfile, smoothPath } from "../lib/pathSmoothing"
+import { costGridFromFrame, findPath } from "../lib/pathPlanner"
+import { smoothPath } from "../lib/pathSmoothing"
 import type { GridPoint } from "../lib/pathSmoothing"
-import { CLASS_COLOR, OBSERVABILITY_COLOR } from "../lib/theme"
+import { buildHeightfieldGeometry } from "../lib/terrainMesh"
+import { CLASS_COLOR, HAZARD_COLOR, OBSERVABILITY_COLOR, PATH_COLOR } from "../lib/theme"
 import type { OverlayMode } from "../state/store"
 import { useDashboardStore } from "../state/store"
 
 const CELL_WORLD_SIZE = 0.32
 const HEIGHT_EXAGGERATION = 2.2
-const MAX_INSTANCES = 4761 // (2*34+1)^2, the worst-case (undecimated) cell count
+const GRID_HALF = 34 // matches mockData.ts's own GRID_HALF -- kept in sync explicitly, not re-derived
 
 const SPARSITY_COLOR: Record<string, string> = {
   NORMAL: "#3fa7d6",
@@ -69,10 +71,17 @@ function colorForCell(cell: DemoFrame["cells"][number], mode: OverlayMode, hMin:
   }
 }
 
-function CellField({ frame }: { frame: DemoFrame }) {
-  const meshRef = useRef<THREE.InstancedMesh>(null)
+/** The terrain surface: one continuous heightfield mesh built from the
+ * frame's per-cell (i, j, height, class) data (terrainMesh.ts), replacing
+ * the old per-cell InstancedMesh box field. Same source data, same
+ * overlay-mode coloring -- only the geometry is now a shaded surface
+ * instead of a bar chart, per the mission-control redesign's #1
+ * priority. Moving cells (the "motion" overlay) still get a red pulse,
+ * drawn as a thin marker ring above the surface rather than a color
+ * change baked into the (now-shared, static-per-frame) vertex buffer. */
+function Terrain({ frame }: { frame: DemoFrame }) {
+  const meshRef = useRef<THREE.Mesh>(null)
   const overlayMode = useDashboardStore((s) => s.overlayMode)
-  const pulseRef = useRef(0)
 
   const { hMin, hMax } = useMemo(() => {
     let mn = Infinity
@@ -84,49 +93,116 @@ function CellField({ frame }: { frame: DemoFrame }) {
     return { hMin: mn, hMax: mx }
   }, [frame])
 
-  const dummy = useMemo(() => new THREE.Object3D(), [])
-
-  useEffect(() => {
-    const mesh = meshRef.current
-    if (!mesh) return
-
-    frame.cells.forEach((cell, idx) => {
-      const x = cell.i * CELL_WORLD_SIZE
-      const z = cell.j * CELL_WORLD_SIZE
-      const y = cell.heightM * HEIGHT_EXAGGERATION * 0.5
-      const heightScale = Math.max(0.02, cell.heightM * HEIGHT_EXAGGERATION + 0.06)
-
-      dummy.position.set(x, y, z)
-      dummy.scale.set(CELL_WORLD_SIZE * 0.92, heightScale, CELL_WORLD_SIZE * 0.92)
-      dummy.updateMatrix()
-      mesh.setMatrixAt(idx, dummy.matrix)
-      mesh.setColorAt(idx, colorForCell(cell, overlayMode, hMin, hMax))
+  const geometry = useMemo(() => {
+    const cells = frame.cells.map((cell) => ({
+      gx: cell.i,
+      gy: cell.j,
+      height: cell.heightM * HEIGHT_EXAGGERATION,
+      color: colorForCell(cell, overlayMode, hMin, hMax),
+    }))
+    return buildHeightfieldGeometry(cells, {
+      minGx: -GRID_HALF,
+      maxGx: GRID_HALF,
+      minGy: -GRID_HALF,
+      maxGy: GRID_HALF,
+      cellSize: CELL_WORLD_SIZE,
+      centerOffset: 0,
+      fallbackColor: new THREE.Color(CLASS_COLOR[0]),
     })
+  }, [frame, overlayMode, hMin, hMax])
 
-    // Hide unused instance slots (frame count varies due to decimation).
-    for (let idx = frame.cells.length; idx < MAX_INSTANCES; idx++) {
-      dummy.position.set(0, -9999, 0)
-      dummy.scale.set(0.0001, 0.0001, 0.0001)
-      dummy.updateMatrix()
-      mesh.setMatrixAt(idx, dummy.matrix)
-    }
-
-    mesh.instanceMatrix.needsUpdate = true
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
-  }, [frame, overlayMode, hMin, hMax, dummy])
-
-  // A gentle pulse on the "motion" overlay's moving cells -- communicates
-  // state (something here is moving RIGHT NOW), not decoration.
-  useFrame((_, delta) => {
-    if (overlayMode !== "motion") return
-    pulseRef.current += delta
-  })
+  useEffect(() => () => geometry.dispose(), [geometry])
 
   return (
-    <instancedMesh ref={meshRef} args={[undefined, undefined, MAX_INSTANCES]} castShadow receiveShadow>
-      <boxGeometry args={[1, 1, 1]} />
-      <meshStandardMaterial roughness={0.7} metalness={0.05} />
-    </instancedMesh>
+    <mesh ref={meshRef} geometry={geometry} castShadow receiveShadow>
+      <meshStandardMaterial vertexColors roughness={0.9} metalness={0} />
+    </mesh>
+  )
+}
+
+/** A small, restrained pulse ring above every currently-moving cell
+ * (the "motion" overlay) -- the one place motion still needs a live
+ * visual cue now that the terrain mesh itself is static per frame. */
+function MotionMarkers({ frame }: { frame: DemoFrame }) {
+  const overlayMode = useDashboardStore((s) => s.overlayMode)
+  const ringRefs = useRef<THREE.Mesh[]>([])
+  const movingCells = useMemo(() => frame.cells.filter((c) => c.isMoving), [frame])
+
+  useFrame((state) => {
+    const pulse = 1 + 0.25 * Math.sin(state.clock.elapsedTime * 5)
+    ringRefs.current.forEach((r) => r?.scale.setScalar(pulse))
+  })
+
+  if (overlayMode !== "motion" || movingCells.length === 0) return null
+
+  return (
+    <>
+      {movingCells.map((cell, idx) => (
+        <mesh
+          key={`${cell.i}-${cell.j}`}
+          ref={(el) => {
+            if (el) ringRefs.current[idx] = el
+          }}
+          position={[cell.i * CELL_WORLD_SIZE, cell.heightM * HEIGHT_EXAGGERATION + 0.15, cell.j * CELL_WORLD_SIZE]}
+          rotation={[-Math.PI / 2, 0, 0]}
+        >
+          <ringGeometry args={[0.14, 0.19, 20]} />
+          <meshBasicMaterial color="#ff5c5c" transparent opacity={0.85} side={THREE.DoubleSide} />
+        </mesh>
+      ))}
+    </>
+  )
+}
+
+const HAZARD_CLASS_ID = 8 // NEGATIVE_OBSTACLE -- the only class this app treats as a hazard marker/label target
+
+/** Professional warning symbology for a hazard region, not a game
+ * marker: a restrained boundary ring in the hazard accent color, a
+ * compact pylon, and a plain-language label (class + distance) --
+ * never a giant glow. Position and distance are computed from the
+ * SAME per-cell data the terrain mesh renders, never invented. */
+function HazardMarker({ frame }: { frame: DemoFrame }) {
+  const hazardCells = useMemo(() => frame.cells.filter((c) => c.classId === HAZARD_CLASS_ID), [frame])
+  const pulseRef = useRef<THREE.Mesh>(null)
+
+  useFrame((state) => {
+    if (!pulseRef.current) return
+    pulseRef.current.scale.setScalar(1 + 0.12 * Math.sin(state.clock.elapsedTime * 3))
+  })
+
+  if (hazardCells.length === 0) return null
+
+  let sumI = 0
+  let sumJ = 0
+  for (const c of hazardCells) {
+    sumI += c.i
+    sumJ += c.j
+  }
+  const centerI = sumI / hazardCells.length
+  const centerJ = sumJ / hazardCells.length
+  const distanceM = Math.hypot(centerI, centerJ) // one grid-index unit == one metre, this codebase's own convention
+
+  const worldX = centerI * CELL_WORLD_SIZE
+  const worldZ = centerJ * CELL_WORLD_SIZE
+  const worldY = 0.04
+
+  return (
+    <group position={[worldX, worldY, worldZ]}>
+      <mesh ref={pulseRef} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.55, 0.68, 32]} />
+        <meshBasicMaterial color={HAZARD_COLOR} transparent opacity={0.75} side={THREE.DoubleSide} />
+      </mesh>
+      <mesh position={[0, 0.55, 0]}>
+        <coneGeometry args={[0.11, 0.32, 12]} />
+        <meshStandardMaterial color={HAZARD_COLOR} emissive={HAZARD_COLOR} emissiveIntensity={0.35} roughness={0.5} />
+      </mesh>
+      <Html position={[0, 0.95, 0]} center distanceFactor={10} occlude={false}>
+        <div className="pointer-events-none select-none rounded-md border border-[#E05245]/50 bg-[#0D141B]/90 px-2.5 py-1.5 text-center whitespace-nowrap">
+          <div className="text-[10px] font-semibold tracking-widest text-[#E05245] uppercase">Trench &middot; High risk</div>
+          <div className="text-[11px] font-mono-tech text-[#E7ECEE]">{distanceM.toFixed(0)} m</div>
+        </div>
+      </Html>
+    </group>
   )
 }
 
@@ -189,86 +265,93 @@ const PATH_GOAL: [number, number] = [PATH_GRID_HALF + 30, PATH_GRID_HALF + 17] /
 // across the pedestrian's own j-range (14-20, see mockData.ts's pedestrianPositionAt), so the
 // direct route genuinely crosses the moving hazard's path at some point in the sequence.
 
-// Perceptual cap for the path's speed-limit colour ramp: green means
-// "no worse than the ~43km/h dry-hazard baseline SpeedGauge's own gauge
-// tops out near," red means the kinodynamic governor has cut speed
-// hard. Not a real vehicle limit by itself -- just this colour ramp's
-// own reference point, kept in one place.
-const SPEED_COLOR_CAP_MS = 12
-
-function speedLimitColor(vMs: number): THREE.Color {
-  const t = Number.isFinite(vMs) ? Math.min(1, Math.max(0, vMs / SPEED_COLOR_CAP_MS)) : 1
-  return new THREE.Color().lerpColors(new THREE.Color("#e0342c"), new THREE.Color("#4fe0a0"), t)
-}
-
-/** Ticket #49's real planner interface, made visible AND made
- * kinodynamically honest: an A* route (planning/path_planner.py)
- * recomputed EVERY frame from the CURRENT cost grid, then smoothed
- * with a Catmull-Rom curve (planning/path_smoothing.py, ported to
- * pathSmoothing.ts) so it no longer shows the raw grid's artificial
- * 45-degree kinks, and coloured along its length by the SAME module's
- * friction-and-curvature-limited cornering speed (green = fast, red =
- * "the governor is slowing down for this stretch") -- Bible Part 14's
- * own framing ("a path re-routing around a pedestrian shows
- * CONSEQUENCE") extended to show WHY the speed varies along the route,
- * not just where the route goes. */
+/** Ticket #49's real planner interface, made visible: an A* route
+ * (planning/path_planner.py) recomputed EVERY frame from the CURRENT
+ * cost grid, then smoothed with a Catmull-Rom curve
+ * (planning/path_smoothing.py, ported to pathSmoothing.ts) so it no
+ * longer shows the raw grid's artificial 45-degree kinks.
+ *
+ * Rendered as a single restrained cyan "safe route" -- the mission-
+ * control redesign's own rule that cyan is reserved exclusively for
+ * the active route/nav state, nothing else. The underlying friction +
+ * curvature speed profile (planning/path_smoothing.py's own
+ * curvatureSpeedProfile) is still computed here and handed to the
+ * caller so GovernorPanel's "why would the vehicle slow down" readout
+ * stays truthful -- only the per-segment colour-by-speed encoding on
+ * the 3D line itself was removed, in favour of the plain-language
+ * governor panel already reporting the binding constraint in words. */
 function PlannedPath({ frame }: { frame: DemoFrame }) {
+  const pulseRef = useRef<THREE.Mesh>(null)
+
   const pathResult = useMemo(() => {
     const { grid, size } = costGridFromFrame(frame, PATH_GRID_HALF)
     return { result: findPath(grid, size, size, PATH_START, PATH_GOAL), size }
   }, [frame])
 
-  const { curvePoints, curveColors } = useMemo(() => {
-    const { result, size } = pathResult
-    if (!result.path || result.path.length < 2) {
-      return { curvePoints: [] as THREE.Vector3[], curveColors: [] as THREE.Color[] }
-    }
+  const curvePoints = useMemo(() => {
+    const { result } = pathResult
+    if (!result.path || result.path.length < 2) return [] as THREE.Vector3[]
 
-    const { classGrid } = classGridFromFrame(frame, PATH_GRID_HALF)
     const smoothed = smoothPath(result.path as GridPoint[])
-    const classAt = (p: GridPoint): number => {
-      const r = Math.round(Math.max(0, Math.min(size - 1, p[0])))
-      const c = Math.round(Math.max(0, Math.min(size - 1, p[1])))
-      return classGrid[r * size + c]
-    }
-    // cellSizeM=1.0 -- this demo's own established convention (see
-    // Scene.tsx's FoveaOverlay/foveaSampleGrid): one grid-index unit is
-    // treated as one metre for every physics formula here, with
-    // CELL_WORLD_SIZE applied ONLY at the final Three.js world-position
-    // step below, identically for every other renderer in this file.
-    const profile = curvatureSpeedProfile(smoothed, 1.0, classAt)
-
     const toWorld = ([r, c]: GridPoint) =>
       new THREE.Vector3((r - PATH_GRID_HALF) * CELL_WORLD_SIZE, 0.18, (c - PATH_GRID_HALF) * CELL_WORLD_SIZE)
+    return smoothed.map(toWorld)
+  }, [pathResult])
 
-    const curvePoints = smoothed.map(toWorld)
-    const curveColors = smoothed.map((_, idx) => {
-      // profile[] covers only the curve's interior points (indices
-      // 1..N-2 of `smoothed`); endpoints borrow their nearest interior
-      // sample. An empty profile (path too short to have curvature)
-      // defaults to "no limit" green rather than an arbitrary colour.
-      if (profile.length === 0) return speedLimitColor(Infinity)
-      const profileIdx = Math.min(profile.length - 1, Math.max(0, idx - 1))
-      return speedLimitColor(profile[profileIdx].vMaxMs)
-    })
-
-    return { curvePoints, curveColors }
-  }, [frame, pathResult])
+  useFrame((state) => {
+    if (!pulseRef.current || curvePoints.length < 2) return
+    // A restrained pulse travelling along the route -- communicates
+    // "this is the active, live-updating route," not decoration.
+    const t = (state.clock.elapsedTime * 0.18) % 1
+    const idx = Math.min(curvePoints.length - 1, Math.floor(t * curvePoints.length))
+    pulseRef.current.position.copy(curvePoints[idx])
+    pulseRef.current.position.y += 0.02
+  })
 
   if (curvePoints.length < 2) return null
 
   return (
     <>
-      <Line points={curvePoints} vertexColors={curveColors} lineWidth={3} />
-      <mesh position={curvePoints[0]}>
-        <sphereGeometry args={[0.12, 12, 12]} />
-        <meshBasicMaterial color="#4fd1ff" />
+      {/* Subtle outer glow beneath the crisp core line. */}
+      <Line points={curvePoints} color={PATH_COLOR} lineWidth={9} transparent opacity={0.16} />
+      <Line points={curvePoints} color={PATH_COLOR} lineWidth={2.5} />
+      <mesh ref={pulseRef} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.05, 0.09, 20]} />
+        <meshBasicMaterial color={PATH_COLOR} transparent opacity={0.9} side={THREE.DoubleSide} />
       </mesh>
-      <mesh position={curvePoints[curvePoints.length - 1]}>
-        <sphereGeometry args={[0.12, 12, 12]} />
-        <meshBasicMaterial color="#4fe0a0" />
-      </mesh>
+      <VehicleMarker position={curvePoints[0]} heading={curvePoints[1]} />
     </>
+  )
+}
+
+/** A compact top-down vehicle chevron -- position + heading, nothing
+ * more. Replaces the old plain glowing sphere; sits at the current
+ * (first) point of the planned route, oriented toward the next point. */
+function VehicleMarker({ position, heading }: { position: THREE.Vector3; heading: THREE.Vector3 }) {
+  const yaw = Math.atan2(heading.x - position.x, heading.z - position.z)
+  return (
+    <group position={[position.x, position.y + 0.02, position.z]} rotation={[0, yaw, 0]}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]}>
+        <shapeGeometry
+          args={[
+            (() => {
+              const s = new THREE.Shape()
+              s.moveTo(0, 0.22)
+              s.lineTo(0.14, -0.16)
+              s.lineTo(0, -0.06)
+              s.lineTo(-0.14, -0.16)
+              s.closePath()
+              return s
+            })(),
+          ]}
+        />
+        <meshStandardMaterial color="#E7ECEE" roughness={0.6} metalness={0} />
+      </mesh>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0.001]}>
+        <ringGeometry args={[0.22, 0.25, 24]} />
+        <meshBasicMaterial color={PATH_COLOR} transparent opacity={0.8} side={THREE.DoubleSide} />
+      </mesh>
+    </group>
   )
 }
 
@@ -311,10 +394,22 @@ function GazeBeam({ frame }: { frame: DemoFrame }) {
   )
 }
 
+/** Subordinate spatial-reference grid -- thin, low-opacity, dark grey,
+ * never competing with terrain (mission-control redesign's own grid
+ * spec). gridHelper's default material isn't transparent by default,
+ * so opacity is set explicitly once the material exists. */
 function GroundGrid() {
-  return (
-    <gridHelper args={[24, 48, "#1c2430", "#131a24"]} position={[0, -0.02, 0]} />
-  )
+  const ref = useRef<THREE.GridHelper>(null)
+  useEffect(() => {
+    const mat = ref.current?.material as THREE.Material | THREE.Material[] | undefined
+    const apply = (m: THREE.Material) => {
+      m.transparent = true
+      m.opacity = 0.1
+    }
+    if (Array.isArray(mat)) mat.forEach(apply)
+    else if (mat) apply(mat)
+  }, [])
+  return <gridHelper ref={ref} args={[24, 48, "#536068", "#536068"]} position={[0, -0.02, 0]} />
 }
 
 function Rig() {
@@ -330,21 +425,23 @@ export function Scene({ frame }: { frame: DemoFrame }) {
       shadows
       camera={{ position: [14, 12, 14], fov: 42 }}
       dpr={[1, 1.75]}
-      gl={{ antialias: true }}
+      gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.25 }}
     >
-      <color attach="background" args={["#05070c"]} />
-      <fog attach="fog" args={["#05070c", 18, 42]} />
-      <ambientLight intensity={0.35} />
+      <color attach="background" args={["#080D12"]} />
+      <fogExp2 attach="fog" args={["#080D12", 0.032]} />
+      <hemisphereLight args={["#2a3540", "#0a0d10", 0.55]} />
+      <ambientLight intensity={0.25} />
       <directionalLight
-        position={[10, 16, 6]}
-        intensity={1.15}
+        position={[-9, 18, 10]}
+        intensity={1.8}
         castShadow
         shadow-mapSize-width={1024}
         shadow-mapSize-height={1024}
       />
-      <pointLight position={[-8, 6, -8]} intensity={0.25} color="#4fd1ff" />
       <GroundGrid />
-      <CellField frame={frame} />
+      <Terrain frame={frame} />
+      <MotionMarkers frame={frame} />
+      <HazardMarker frame={frame} />
       <FoveaOverlay />
       <PlannedPath frame={frame} />
       <GazeBeam frame={frame} />

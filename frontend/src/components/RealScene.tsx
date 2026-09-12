@@ -21,14 +21,33 @@ import { useEffect, useRef, useState } from "react"
 import * as THREE from "three"
 import type { RealFrame, RealManifest } from "../lib/realData"
 import { loadFrame, loadManifest } from "../lib/realData"
+import { PATH_COLOR } from "../lib/theme"
 import { RealPointCloud } from "./RealPointCloud"
 import { RealTerrain } from "./RealTerrain"
 import { VariableResGrid } from "./VariableResGrid"
 
+/** A compact vehicle marker at the ego origin -- every exported real
+ * frame is in the sensor/ego frame (see realData.ts's own doc comment),
+ * so the vehicle is, by construction, always at (0, 0, 0). */
+function RealVehicleMarker() {
+  return (
+    <group position={[0, 0.03, 0]}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]}>
+        <coneGeometry args={[0.12, 0.28, 3]} />
+        <meshStandardMaterial color="#E7ECEE" roughness={0.6} metalness={0} />
+      </mesh>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0.001]}>
+        <ringGeometry args={[0.2, 0.23, 24]} />
+        <meshBasicMaterial color={PATH_COLOR} transparent opacity={0.8} side={THREE.DoubleSide} />
+      </mesh>
+    </group>
+  )
+}
+
 function LoadingOverlay({ message }: { message: string }) {
   return (
-    <div className="absolute inset-0 flex items-center justify-center bg-[#05070c]">
-      <div className="text-slate-400 font-mono-tech text-sm">{message}</div>
+    <div className="absolute inset-0 flex items-center justify-center bg-[#080D12]">
+      <div className="text-[#96A3A8] text-sm max-w-sm text-center px-6">{message}</div>
     </div>
   )
 }
@@ -47,10 +66,10 @@ function RealPlaybackBar({
   onTogglePlay: () => void
 }) {
   return (
-    <div className="absolute bottom-3 left-3 right-3 flex items-center gap-3 rounded-xl border border-white/10 bg-black/40 backdrop-blur-md px-4 py-2.5">
+    <div className="panel-glass absolute bottom-3 left-3 right-3 flex items-center gap-3 px-4 py-2.5">
       <button
         onClick={onTogglePlay}
-        className="h-8 w-8 flex items-center justify-center rounded-full border border-white/10 bg-white/5 text-slate-200"
+        className="h-8 w-8 flex items-center justify-center rounded-full border border-white/10 bg-white/5 text-[#E7ECEE]"
       >
         {isPlaying ? "||" : ">"}
       </button>
@@ -60,9 +79,9 @@ function RealPlaybackBar({
         max={Math.max(0, frameCount - 1)}
         value={frameIndex}
         onChange={(e) => onScrub(Number(e.target.value))}
-        className="flex-1 accent-cyan-400"
+        className="flex-1 accent-[#55D6E8]"
       />
-      <span className="font-mono-tech text-xs text-slate-400 w-16 text-right">
+      <span className="font-mono-tech text-xs text-[#96A3A8] w-16 text-right">
         {String(frameIndex + 1).padStart(2, "0")}/{frameCount}
       </span>
     </div>
@@ -71,9 +90,9 @@ function RealPlaybackBar({
 
 function RealLegend({ manifest }: { manifest: RealManifest }) {
   return (
-    <div className="absolute top-3 left-3 rounded-xl border border-white/10 bg-black/40 backdrop-blur-md px-3 py-2 max-w-xs">
-      <div className="text-[11px] uppercase tracking-widest text-cyan-400/80 mb-1">Real data</div>
-      <div className="text-[11px] text-slate-400 leading-relaxed">
+    <div className="panel-glass absolute top-3 left-3 px-3 py-2 max-w-xs">
+      <div className="text-[11px] uppercase tracking-widest text-[#96A3A8] mb-1 font-medium">Live sensors</div>
+      <div className="text-[11px] text-[#96A3A8] leading-relaxed">
         Real RELLIS-3D LiDAR + real FusionSegNet (checkpoint epoch {manifest.trainedEpoch}). Points, terrain, and
         resolution rings are computed from a real trained model on real off-road data -- not synthetic.
       </div>
@@ -133,17 +152,18 @@ export function RealScene() {
         shadows={false}
         camera={{ position: [8, 7, 8], fov: 45 }}
         dpr={[1, 1.75]}
-        gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.1 }}
+        gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.2 }}
       >
-        <color attach="background" args={["#05070c"]} />
-        <fog attach="fog" args={["#05070c", 14, 45]} />
-        <ambientLight intensity={0.4} />
-        <directionalLight position={[10, 16, 6]} intensity={1.2} />
-        <pointLight position={[-8, 6, -8]} intensity={0.2} color="#4fd1ff" />
+        <color attach="background" args={["#080D12"]} />
+        <fogExp2 attach="fog" args={["#080D12", 0.055]} />
+        <hemisphereLight args={["#2a3540", "#0a0d10", 0.5]} />
+        <ambientLight intensity={0.22} />
+        <directionalLight position={[-6, 12, 7]} intensity={1.75} />
 
         <VariableResGrid levels={manifest.levels} />
         <RealTerrain frame={frame} levels={manifest.levels} />
         <RealPointCloud frame={frame} />
+        <RealVehicleMarker />
 
         <OrbitControls enableDamping dampingFactor={0.08} minDistance={2} maxDistance={35} maxPolarAngle={Math.PI / 2.05} />
 

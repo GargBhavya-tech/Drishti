@@ -53,17 +53,17 @@ export function SpeedGauge({ envelope }: { envelope: SpeedEnvelopeState }) {
 
   return (
     <motion.div
-      className="rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-md p-3 flex flex-col items-center"
+      className="panel-glass p-3 flex flex-col items-center"
       initial={{ opacity: 0, y: motionTokens.distance.sm }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: motionTokens.duration.normal, ease: motionTokens.easing.smooth }}
     >
-      <div className="text-[11px] uppercase tracking-widest text-cyan-400/80 self-start mb-1">Speed envelope</div>
+      <div className="text-[11px] uppercase tracking-widest text-[#96A3A8] self-start mb-1 font-medium">Speed envelope</div>
       <svg width={180} height={130} viewBox="0 0 180 130">
         <path d={arcPath(cx, cy, r, START_ANGLE, END_ANGLE)} stroke="#1c2430" strokeWidth={10} fill="none" strokeLinecap="round" />
         <path
           d={arcPath(cx, cy, r, redZoneStart, END_ANGLE)}
-          stroke="#e0342c"
+          stroke="#E05245"
           strokeOpacity={0.55}
           strokeWidth={10}
           fill="none"
@@ -71,7 +71,7 @@ export function SpeedGauge({ envelope }: { envelope: SpeedEnvelopeState }) {
         />
         <path
           d={arcPath(cx, cy, r, START_ANGLE, angleForSpeed(envelope.vMaxKmh))}
-          stroke={isOccluded ? "#ffb84f" : "#4fd1ff"}
+          stroke={isOccluded ? "#ffb84f" : "#55D6E8"}
           strokeWidth={5}
           fill="none"
           strokeLinecap="round"

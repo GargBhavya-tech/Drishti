@@ -70,12 +70,12 @@ export function GovernorPanel({ frame }: { frame: DemoFrame }) {
 
   return (
     <motion.div
-      className="rounded-xl border border-white/10 bg-white/[0.03] backdrop-blur-md p-3"
+      className="panel-glass p-3"
       initial={{ opacity: 0, y: motionTokens.distance.sm }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: motionTokens.duration.normal, ease: motionTokens.easing.smooth }}
     >
-      <div className="text-[11px] uppercase tracking-widest text-cyan-400/80 mb-2">Kinodynamic governor</div>
+      <div className="text-[11px] uppercase tracking-widest text-[#96A3A8] mb-2 font-medium">Speed governor</div>
       <div className="flex items-baseline justify-between py-1 border-b border-white/5">
         <span className="text-[11px] uppercase tracking-wider text-slate-500">Terrain grip</span>
         <span className="text-sm text-slate-200">

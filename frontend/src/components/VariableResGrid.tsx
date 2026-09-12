@@ -47,10 +47,13 @@ const FRAGMENT_SHADER = `
     }
     float line = gridLine(vWorldXZ, spacing * worldScale);
     if (line < 0.05) discard;
-    vec3 nearColor = vec3(0.31, 0.65, 0.86);
-    vec3 farColor = vec3(0.9, 0.65, 0.2);
-    vec3 color = mix(nearColor, farColor, clamp(r / radii[${MAX_LEVELS - 1}], 0.0, 1.0));
-    gl_FragColor = vec4(color, line * 0.32);
+    // Subordinate spatial reference only -- a single muted grey, never
+    // competing with the terrain/hazard/path colours above it, fading
+    // from ~10% near to fully transparent by the coarsest level's own
+    // Nyquist radius (mission-control redesign's own grid spec).
+    vec3 gridColor = vec3(0.325, 0.376, 0.407);
+    float distFade = 1.0 - clamp(r / radii[${MAX_LEVELS - 1}], 0.0, 1.0);
+    gl_FragColor = vec4(gridColor, line * 0.11 * distFade);
   }
 `
 
