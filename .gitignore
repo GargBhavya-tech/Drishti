@@ -14,6 +14,7 @@ data/
 checkpoints/
 checkpoints_remote/
 checkpoints_multi_remote/
+checkpoints_multi_v2_remote/
 channel_stats.json
 val_metrics_epoch*.json
 
