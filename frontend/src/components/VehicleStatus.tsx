@@ -1,39 +1,15 @@
 /**
- * VehicleStatus.tsx -- a compact professional status card (engineering-
- * portal redesign, Section 11), replacing the old circular game-style
- * speedometer. Every value is read from real application state, never
- * fabricated:
- *
- * - Speed: the store's own `egoSpeedMs` (already the real value driving
- *   the gaze/fovea calculations elsewhere -- see Scene.tsx's GazeBeam),
- *   not the speed-envelope LIMIT (a different quantity: "how fast it's
- *   safe to go" vs. "how fast it's going").
- * - Heading: the bearing of the first segment of the SAME live-
- *   replanned A* route MissionStatus/GovernorPanel already compute.
- * - Route: MissionStatus's own clear/hazard derivation.
- * - Terrain confidence: the real fraction of this frame's cells whose
- *   observability is OCCUPIED (an actual confirmed return), not FREE/
- *   OCCLUDED/UNOBSERVED -- a genuine per-frame metric, not a placeholder.
+ * VehicleStatus.tsx -- a compact professional status card, replacing
+ * the old circular game-style speedometer. Every value comes from
+ * vehicleState.ts's single shared derivation (see that module's own
+ * doc comment) so this card can never disagree with CurrentHazards,
+ * MissionStatus, or the 3D scene about where the vehicle is or whether
+ * the route is clear.
  */
 
-import { useMemo } from "react"
-import { deriveMissionStatus, distanceFromHazardToPath } from "../lib/missionStatus"
+import { computeVehicleState } from "../lib/vehicleState"
 import type { DemoFrame } from "../lib/mockData"
-import { costGridFromFrame, findPath } from "../lib/pathPlanner"
-import { smoothPath } from "../lib/pathSmoothing"
-import type { GridPoint } from "../lib/pathSmoothing"
 import { useDashboardStore } from "../state/store"
-
-const PATH_GRID_HALF = 34 // kept in sync with Scene.tsx's own constant of the same name
-const PATH_START: GridPoint = [PATH_GRID_HALF - 30, PATH_GRID_HALF + 17]
-const PATH_GOAL: GridPoint = [PATH_GRID_HALF + 30, PATH_GRID_HALF + 17]
-
-function headingDegrees(from: GridPoint, to: GridPoint): number {
-  const dx = to[0] - from[0]
-  const dz = to[1] - from[1]
-  const rad = Math.atan2(dx, dz) // same convention Scene.tsx's VehicleMarker yaw uses
-  return Math.round(((rad * 180) / Math.PI + 360) % 360)
-}
 
 function Row({ label, value, accent }: { label: string; value: string; accent?: string }) {
   return (
@@ -46,31 +22,45 @@ function Row({ label, value, accent }: { label: string; value: string; accent?: 
   )
 }
 
-export function VehicleStatus({ frame }: { frame: DemoFrame }) {
+/** A small top-down vehicle glyph -- a static icon standing in for a
+ * live-rendered thumbnail (this app has no snapshot-of-the-3D-scene
+ * pipeline), styled to match UgvModel.tsx's own silhouette/material so
+ * it reads as "the same vehicle," not a generic stock icon. */
+function VehicleGlyph() {
+  return (
+    <div className="h-11 w-11 rounded-md bg-[#F3F5F6] border border-[#D9E2EC] flex items-center justify-center flex-none">
+      <svg width="26" height="26" viewBox="0 0 32 32">
+        <rect x="4" y="10" width="24" height="14" rx="2" fill="#3E4648" />
+        <rect x="9" y="7" width="14" height="7" rx="1.5" fill="#7C8789" />
+        <circle cx="9" cy="24" r="3" fill="#20272A" />
+        <circle cx="23" cy="24" r="3" fill="#20272A" />
+        <circle cx="9" cy="10" r="3" fill="#20272A" />
+        <circle cx="23" cy="10" r="3" fill="#20272A" />
+        <circle cx="25" cy="16" r="1.4" fill="#087E8B" />
+      </svg>
+    </div>
+  )
+}
+
+export function VehicleStatus({ frame, frameIndex, frameCount }: { frame: DemoFrame; frameIndex: number; frameCount: number }) {
   const egoSpeedMs = useDashboardStore((s) => s.egoSpeedMs)
-
-  const { headingDeg, route, confidencePct } = useMemo(() => {
-    const { grid, size } = costGridFromFrame(frame, PATH_GRID_HALF)
-    const result = findPath(grid, size, size, PATH_START, PATH_GOAL)
-    const smoothed = result.path && result.path.length >= 2 ? smoothPath(result.path as GridPoint[]) : []
-    const distanceM = distanceFromHazardToPath(frame, smoothed)
-    const status = deriveMissionStatus(distanceM)
-
-    const heading = smoothed.length >= 2 ? headingDegrees(smoothed[0], smoothed[1]) : 0
-
-    const occupied = frame.cells.filter((c) => c.observability === "OCCUPIED").length
-    const confidence = frame.cells.length > 0 ? (occupied / frame.cells.length) * 100 : 0
-
-    return { headingDeg: heading, route: status.level, confidencePct: confidence }
-  }, [frame])
+  const state = computeVehicleState(frame, frameIndex, frameCount)
 
   return (
     <div className="panel-light p-3">
-      <div className="text-[11px] uppercase tracking-widest text-[#52606D] mb-2 font-semibold">Vehicle status</div>
+      <div className="flex items-center gap-3 mb-2.5">
+        <VehicleGlyph />
+        <div className="text-[11px] uppercase tracking-widest text-[#52606D] font-semibold">Vehicle status</div>
+      </div>
       <Row label="Speed" value={`${(egoSpeedMs * 3.6).toFixed(1)} km/h`} />
-      <Row label="Heading" value={`${String(headingDeg).padStart(3, "0")}°`} />
-      <Row label="Route" value={route === "hazard" ? "REROUTED" : "SAFE"} accent={route === "hazard" ? "#C83C32" : "#087E8B"} />
-      <Row label="Terrain confidence" value={`${confidencePct.toFixed(0)}%`} />
+      <Row label="Heading" value={`${String(state.headingDeg).padStart(3, "0")}°`} />
+      <Row
+        label="Route"
+        value={state.route === "hazard" ? "REROUTED" : "SAFE"}
+        accent={state.route === "hazard" ? "#C83C32" : "#087E8B"}
+      />
+      <Row label="Terrain confidence" value={`${state.confidencePct.toFixed(0)}%`} />
+      <Row label="Position (local)" value={`${state.positionLocal.x.toFixed(1)}, ${state.positionLocal.z.toFixed(1)}, ${state.positionLocal.heightM.toFixed(1)}`} />
     </div>
   )
 }

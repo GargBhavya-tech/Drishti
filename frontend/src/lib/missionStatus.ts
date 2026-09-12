@@ -41,17 +41,15 @@ function pointToSegmentDistance(p: [number, number], a: [number, number], b: [nu
   return Math.hypot(px - cx, py - cy)
 }
 
-/** Minimum distance (metres) from any hazard-class cell in `frame` to
- * the polyline `pathPoints` (grid-index units, one unit == one metre --
- * this codebase's own established convention). `null` if there is no
- * hazard-class cell in the frame at all. */
-export function distanceFromHazardToPath(frame: DemoFrame, pathPoints: GridPoint[]): number | null {
-  const hazardCells = frame.cells.filter((c) => HAZARD_CLASS_IDS.has(c.classId))
-  if (hazardCells.length === 0 || pathPoints.length < 2) return null
+/** Minimum distance (metres) from any (i, j) point in `points` to the
+ * polyline `pathPoints` (grid-index units, one unit == one metre -- this
+ * codebase's own established convention). `null` if `points` is empty. */
+export function minDistancePointsToPath(points: { i: number; j: number }[], pathPoints: GridPoint[]): number | null {
+  if (points.length === 0 || pathPoints.length < 2) return null
 
   let minDist = Infinity
-  for (const cell of hazardCells) {
-    const p: [number, number] = [cell.i, cell.j]
+  for (const point of points) {
+    const p: [number, number] = [point.i, point.j]
     for (let i = 0; i < pathPoints.length - 1; i++) {
       const a: [number, number] = [pathPoints[i][0], pathPoints[i][1]]
       const b: [number, number] = [pathPoints[i + 1][0], pathPoints[i + 1][1]]
@@ -60,6 +58,14 @@ export function distanceFromHazardToPath(frame: DemoFrame, pathPoints: GridPoint
     }
   }
   return Number.isFinite(minDist) ? minDist : null
+}
+
+/** Minimum distance (metres) from any hazard-class cell in `frame` to
+ * the polyline `pathPoints`. `null` if there is no hazard-class cell in
+ * the frame at all. */
+export function distanceFromHazardToPath(frame: DemoFrame, pathPoints: GridPoint[]): number | null {
+  const hazardCells = frame.cells.filter((c) => HAZARD_CLASS_IDS.has(c.classId))
+  return minDistancePointsToPath(hazardCells, pathPoints)
 }
 
 export function deriveMissionStatus(distanceM: number | null): MissionStatus {
