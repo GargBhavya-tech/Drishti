@@ -190,12 +190,134 @@ def rellis_label_ids_to_drishti(label_ids) -> "object":
     return out
 
 
+# ---------------------------------------------------------------------------
+# SemanticPOSS (Peking University campus dataset) -> DRISHTI. Keyed by
+# NAME, same two-level ID->name->DrishtiClass pattern as RELLIS-3D above.
+#
+# Confirmation status: SEMANTICPOSS_ID_TO_NAME is transcribed directly
+# from the dataset's OWN published `read_data.py` LABEL_DICT (shipped
+# inside the downloaded SemanticPOSS_dataset.zip), not a third-party
+# summary -- high confidence. One real discrepancy found and left
+# UNRESOLVED rather than guessed at: id 20 was observed in real
+# downloaded frame data (sequence 00, frame 0) but does NOT appear in
+# read_data.py's own LABEL_DICT at all (which jumps 17 -> 21). Left
+# out of SEMANTICPOSS_ID_TO_NAME below -- an ID this loader has never
+# seen documented falls through to UNKNOWN via the same "unrecognised
+# label IS what UNKNOWN means" stance as rellis_label_ids_to_drishti,
+# rather than guessing what id 20 represents.
+#
+# Mapping decisions worth stating explicitly (Bible Part A.3's "state
+# limitations" principle):
+# - "rider" (a person on a bike/vehicle) has no dedicated DRISHTI class.
+#   Mapped to PEDESTRIAN (protect-the-person priority) rather than
+#   VEHICLE -- the entity to avoid hitting is a person-shaped moving
+#   thing, matching this project's stated PEDESTRIAN = "highest
+#   protection priority" framing (Bible Part C.6), not a judgment that
+#   a rider behaves like a stationary pedestrian.
+# - "traffic sign 2/3" (hanging/high-hanging signs) are physically
+#   overhead obstacles -- exactly what OVERHANG exists to represent --
+#   but NO dataset semantic label may EVER map to classes 8/9
+#   (assert_taxonomy_valid enforces this at import time, Bible Part
+#   C.6's "network never invents a hazard" boundary). Mapped to
+#   STATIC_OBSTACLE instead, honestly under-representing their real
+#   overhead nature rather than breaking that boundary.
+# - "cone/stone" merges two real-world objects of very different
+#   character (a soft traffic cone vs. a solid rock) into one dataset
+#   label -- mapped to STATIC_OBSTACLE (the conservative choice: a
+#   stone that gets treated as CAUTION would be the actually dangerous
+#   direction to be wrong in, not the reverse).
+SEMANTICPOSS_TO_DRISHTI: Dict[str, DrishtiClass] = {
+    "unlabeled": DrishtiClass.UNKNOWN,
+    "1 person": DrishtiClass.PEDESTRIAN,
+    "2+ person": DrishtiClass.PEDESTRIAN,
+    "rider": DrishtiClass.PEDESTRIAN,          # see docstring
+    "car": DrishtiClass.VEHICLE,
+    "trunk": DrishtiClass.STATIC_OBSTACLE,     # tree trunk -- solid, pole-like
+    "plants": DrishtiClass.VEGETATION,
+    "traffic sign 1": DrishtiClass.STATIC_OBSTACLE,   # standing sign
+    "traffic sign 2": DrishtiClass.STATIC_OBSTACLE,   # hanging sign -- see docstring re: OVERHANG
+    "traffic sign 3": DrishtiClass.STATIC_OBSTACLE,   # high/big hanging sign -- see docstring
+    "pole": DrishtiClass.STATIC_OBSTACLE,
+    "trashcan": DrishtiClass.STATIC_OBSTACLE,
+    "building": DrishtiClass.STATIC_OBSTACLE,
+    "cone/stone": DrishtiClass.STATIC_OBSTACLE,       # see docstring
+    "fence": DrishtiClass.NON_TRAVERSABLE,
+    "bike": DrishtiClass.VEHICLE,
+    "ground": DrishtiClass.DRIVABLE,
+}
+
+
+# Numeric ID -> name, transcribed directly from SemanticPOSS's own
+# read_data.py LABEL_DICT (see docstring above for the id-20 gap this
+# deliberately leaves unmapped).
+SEMANTICPOSS_ID_TO_NAME: Dict[int, str] = {
+    0: "unlabeled",
+    4: "1 person",
+    5: "2+ person",
+    6: "rider",
+    7: "car",
+    8: "trunk",
+    9: "plants",
+    10: "traffic sign 1",
+    11: "traffic sign 2",
+    12: "traffic sign 3",
+    13: "pole",
+    14: "trashcan",
+    15: "building",
+    16: "cone/stone",
+    17: "fence",
+    21: "bike",
+    22: "ground",
+}
+
+
+def semanticposs_label_ids_to_drishti(label_ids) -> "object":
+    """Vectorised: raw SemanticPOSS `.label` numeric IDs (low 16 bits
+    already masked by the caller, same convention as RELLIS) -> DrishtiClass
+    IDs (numpy int64 array). Mirrors rellis_label_ids_to_drishti exactly:
+    an ID not present in SEMANTICPOSS_ID_TO_NAME (e.g. the real-but-
+    undocumented id 20 -- see docstring above) maps to DrishtiClass.UNKNOWN
+    rather than raising."""
+    import numpy as np
+
+    label_ids = np.asarray(label_ids)
+    out = np.full(label_ids.shape, int(DrishtiClass.UNKNOWN), dtype=np.int64)
+    for raw_id, name in SEMANTICPOSS_ID_TO_NAME.items():
+        drishti_class = SEMANTICPOSS_TO_DRISHTI.get(name)
+        if drishti_class is None:
+            continue
+        out[label_ids == raw_id] = int(drishti_class)
+    return out
+
+
+def build_nuscenes_lidarseg_lut(nusc) -> "object":
+    """Raw uint8 lidarseg category index (0..31, as nuScenes' own
+    `.bin` label files store per point) -> DrishtiClass int, as a 256-
+    entry numpy lookup table. Shared by eval/eval_nuscenes.py (zero-shot
+    eval) and perception/nuscenes_seg_dataset.py (fine-tune training) --
+    moved here (single source of truth) rather than left duplicated in
+    eval/eval_nuscenes.py, which is where this first lived (Ticket #2's
+    zero-shot benchmark) before a training path needed the identical
+    lookup. An index absent from `nusc.lidarseg_idx2name_mapping` (should
+    not happen for a real nuScenes install) falls back to UNKNOWN rather
+    than raising, matching `rellis_label_ids_to_drishti`'s own stance
+    that an unrecognised label IS what UNKNOWN means."""
+    import numpy as np
+
+    lut = np.full(256, int(DrishtiClass.UNKNOWN), dtype=np.int64)
+    for idx, name in nusc.lidarseg_idx2name_mapping.items():
+        drishti_class = NUSCENES_LIDARSEG_TO_DRISHTI.get(name, DrishtiClass.UNKNOWN)
+        lut[int(idx)] = int(drishti_class)
+    return lut
+
+
 def assert_taxonomy_valid() -> None:
     """Machine-checked form of the class-8/9 boundary. Run at import time
     (below) so a bad edit fails immediately, not just when the Ticket #8
     test happens to run."""
     for name, mapping in (
         ("nuScenes-lidarseg", NUSCENES_LIDARSEG_TO_DRISHTI),
+        ("SemanticPOSS", SEMANTICPOSS_TO_DRISHTI),
         ("RELLIS-3D", RELLIS_TO_DRISHTI),
     ):
         for source_class, drishti_class in mapping.items():

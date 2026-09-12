@@ -39,23 +39,13 @@ from perception.range_image import RangeImage, project_to_range_image
 from perception.segnet import FusionSegNet, N_CLASSES_DEFAULT
 from perception.sweep import Sweep
 from perception.taxonomy import (
-    NUSCENES_LIDARSEG_TO_DRISHTI,
     DrishtiClass,
+    build_nuscenes_lidarseg_lut,
 )
 from sensor.sensor_model import SensorConfig, load_sensor_config
 
 
 CLASS_NAMES = [c.name for c in DrishtiClass]
-
-
-def build_lidarseg_lut(nusc) -> np.ndarray:
-    """Build a lookup table mapping raw uint8 lidarseg category index (0..31)
-    to DrishtiClass integer value."""
-    lut = np.full(256, int(DrishtiClass.UNKNOWN), dtype=np.int64)
-    for idx, name in nusc.lidarseg_idx2name_mapping.items():
-        drishti_class = NUSCENES_LIDARSEG_TO_DRISHTI.get(name, DrishtiClass.UNKNOWN)
-        lut[int(idx)] = int(drishti_class)
-    return lut
 
 
 def load_point_predictions_and_truth(
@@ -289,7 +279,7 @@ def main():
     # 1. Initialize nuScenes
     from nuscenes.nuscenes import NuScenes
     nusc = NuScenes(version=args.version, dataroot=args.dataroot, verbose=False)
-    lut = build_lidarseg_lut(nusc)
+    lut = build_nuscenes_lidarseg_lut(nusc)
 
     # 2. Collect all sample tokens that have lidarseg data
     sample_tokens = []

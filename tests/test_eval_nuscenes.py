@@ -37,12 +37,14 @@ def test_metrics_from_matrix():
     assert res["per_class"][0]["point_count"] == 13  # row sum
 
 
+from perception.segnet import FusionSegNet, N_CLASSES_DEFAULT, N_INPUT_CHANNELS
+
+
 def test_model_forward_hdl32e_shape():
     """Verify FusionSegNet accepts a 32x1080 range image without crashing."""
     model = FusionSegNet(n_classes=N_CLASSES_DEFAULT)
     model.eval()
-    in_channels = model.stem[0].in_channels
-    dummy_input = torch.randn(1, in_channels, 32, 1080)
+    dummy_input = torch.randn(1, N_INPUT_CHANNELS, 32, 1080)
     with torch.no_grad():
         out = model(dummy_input)
     assert out.shape == (1, N_CLASSES_DEFAULT, 32, 1080)
