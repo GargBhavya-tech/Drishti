@@ -20,16 +20,24 @@ import { smoothPath } from "../lib/pathSmoothing"
 import type { GridPoint } from "../lib/pathSmoothing"
 import type { Heightfield } from "../lib/terrainMesh"
 import { buildHeightfieldGeometry } from "../lib/terrainMesh"
-import { CLASS_COLOR, HAZARD_COLOR, OBSERVABILITY_COLOR, PATH_COLOR, SURFACE, terrainFillColor } from "../lib/theme"
+import { BASE_TERRAIN_COLOR, CLASS_COLOR, HAZARD_COLOR, OBSERVABILITY_COLOR, PATH_COLOR, SURFACE, terrainFillColor } from "../lib/theme"
 import type { OverlayMode } from "../state/store"
 import { FRAME_COUNT_EXPORT, useDashboardStore } from "../state/store"
 import { UgvModel } from "./UgvModel"
 
 const CELL_WORLD_SIZE = 0.32
-// Restrained -- a meaningful feature (the trench) still reads clearly;
-// raw per-cell noise no longer dominates the view (see terrainMesh.ts's
-// own smoothing pass, which does most of the actual work here).
-const HEIGHT_EXAGGERATION = 1.3
+// heightM is real metres; CELL_WORLD_SIZE is the world-unit size of one
+// HORIZONTAL metre. Multiplying height by CELL_WORLD_SIZE first keeps
+// vertical and horizontal on the SAME physical scale -- true-scale
+// terrain, before any deliberate exaggeration -- and TERRAIN_RELIEF then
+// applies a modest, restrained bump (well under the "2-3x for meaningful
+// features" allowance) purely for visual legibility. The previous
+// version multiplied raw metres directly without the CELL_WORLD_SIZE
+// factor, which (independent of any exaggeration constant) made terrain
+// read roughly 3x steeper than it physically is -- the dominant reason
+// it still looked like a spiky graph rather than gentle ground.
+const TERRAIN_RELIEF = 1.8
+const HEIGHT_WORLD_SCALE = CELL_WORLD_SIZE * TERRAIN_RELIEF
 const GRID_HALF = 34 // matches mockData.ts's own GRID_HALF -- kept in sync explicitly, not re-derived
 
 const SPARSITY_COLOR: Record<string, string> = {
@@ -96,7 +104,7 @@ function useTerrainHeightfield(frame: DemoFrame, overlayMode: OverlayMode): Heig
     const cells = frame.cells.map((cell) => ({
       gx: cell.i,
       gy: cell.j,
-      height: cell.heightM * HEIGHT_EXAGGERATION,
+      height: cell.heightM * HEIGHT_WORLD_SCALE,
       color: colorForCell(cell, overlayMode, hMin, hMax),
     }))
     return buildHeightfieldGeometry(cells, {
@@ -106,7 +114,7 @@ function useTerrainHeightfield(frame: DemoFrame, overlayMode: OverlayMode): Heig
       maxGy: GRID_HALF,
       cellSize: CELL_WORLD_SIZE,
       centerOffset: 0,
-      fallbackColor: new THREE.Color(CLASS_COLOR[0]),
+      fallbackColor: new THREE.Color(BASE_TERRAIN_COLOR),
       smoothPasses: 3,
       edgeFadeCells: 6,
     })
@@ -217,6 +225,116 @@ function HazardMarker({ frame, heightfield }: { frame: DemoFrame; heightfield: H
   )
 }
 
+const STATIC_OBSTACLE_CLASS_ID = 4
+// Fixed, deterministic scatter offsets (fraction of the cluster's own
+// bounding box, in [-1, 1]) -- NOT Math.random(), so the layout is
+// stable across re-renders instead of jittering every frame.
+const ROCK_SCATTER: [number, number, number][] = [
+  [-0.5, -0.4, 0.14],
+  [0.3, 0.5, 0.1],
+  [-0.15, 0.55, 0.08],
+  [0.5, -0.35, 0.11],
+  [0.05, -0.05, 0.16],
+]
+
+/** Obstacles are physical objects, not colored terrain: a small cluster
+ * of low-poly rock-like forms (irregular icosahedra) sitting directly
+ * on the (unbumped, physically accurate) terrain height at each rock's
+ * own position -- the terrain-architecture redesign's own "obstacles
+ * should be physical objects... rock, boulder... simple low-poly
+ * geometry with proper lighting," never a flat colored patch of ground. */
+function ObstacleMarkers({ frame, heightfield }: { frame: DemoFrame; heightfield: Heightfield }) {
+  const obstacleCells = useMemo(() => frame.cells.filter((c) => c.classId === STATIC_OBSTACLE_CLASS_ID), [frame])
+  if (obstacleCells.length === 0) return null
+
+  let minI = Infinity
+  let maxI = -Infinity
+  let minJ = Infinity
+  let maxJ = -Infinity
+  for (const c of obstacleCells) {
+    minI = Math.min(minI, c.i)
+    maxI = Math.max(maxI, c.i)
+    minJ = Math.min(minJ, c.j)
+    maxJ = Math.max(maxJ, c.j)
+  }
+  const centerI = (minI + maxI) / 2
+  const centerJ = (minJ + maxJ) / 2
+  const halfSpanI = Math.max(1.5, (maxI - minI) / 2)
+  const halfSpanJ = Math.max(1.5, (maxJ - minJ) / 2)
+
+  return (
+    <>
+      {ROCK_SCATTER.map(([fi, fj, size], idx) => {
+        const i = centerI + fi * halfSpanI
+        const j = centerJ + fj * halfSpanJ
+        const worldX = i * CELL_WORLD_SIZE
+        const worldZ = j * CELL_WORLD_SIZE
+        const worldY = heightfield.sampleHeight(i, j) + size * 0.5
+        return (
+          <mesh
+            key={idx}
+            position={[worldX, worldY, worldZ]}
+            rotation={[idx * 0.7, idx * 1.3, idx * 0.4]}
+            scale={[size, size * 0.8, size]}
+            castShadow
+            receiveShadow
+          >
+            <icosahedronGeometry args={[1, 0]} />
+            <meshStandardMaterial color={CLASS_COLOR[STATIC_OBSTACLE_CLASS_ID]} roughness={0.95} metalness={0} flatShading />
+          </mesh>
+        )
+      })}
+    </>
+  )
+}
+
+const OVERHANG_CLASS_ID = 9
+const OVERHANG_CLEARANCE = 0.55 // world units of headroom the ledge sits above local ground
+
+/** An overhang is a ceiling/clearance hazard ABOVE the vehicle, not
+ * raised ground -- represented as a real physical rock face (a wall)
+ * with a ledge jutting out from it at headroom height, never as a bump
+ * in the terrain's own height field (see mockData.ts's own comment on
+ * why that earlier encoding was removed). */
+function OverhangMarkers({ frame, heightfield }: { frame: DemoFrame; heightfield: Heightfield }) {
+  const overhangCells = useMemo(() => frame.cells.filter((c) => c.classId === OVERHANG_CLASS_ID), [frame])
+  if (overhangCells.length === 0) return null
+
+  let minI = Infinity
+  let maxI = -Infinity
+  let minJ = Infinity
+  let maxJ = -Infinity
+  for (const c of overhangCells) {
+    minI = Math.min(minI, c.i)
+    maxI = Math.max(maxI, c.i)
+    minJ = Math.min(minJ, c.j)
+    maxJ = Math.max(maxJ, c.j)
+  }
+  const centerJ = (minJ + maxJ) / 2
+  const spanJ = Math.max(1, maxJ - minJ) * CELL_WORLD_SIZE
+  const spanI = Math.max(1, maxI - minI) * CELL_WORLD_SIZE
+  const groundY = heightfield.sampleHeight((minI + maxI) / 2, centerJ)
+
+  const wallX = minI * CELL_WORLD_SIZE
+  const ledgeCenterX = ((minI + maxI) / 2) * CELL_WORLD_SIZE
+  const worldZ = centerJ * CELL_WORLD_SIZE
+
+  return (
+    <group>
+      {/* The rock face the ledge protrudes from. */}
+      <mesh position={[wallX, groundY + OVERHANG_CLEARANCE, worldZ]} castShadow receiveShadow>
+        <boxGeometry args={[0.12, OVERHANG_CLEARANCE * 2 + 0.3, spanJ * 0.96]} />
+        <meshStandardMaterial color={CLASS_COLOR[OVERHANG_CLASS_ID]} roughness={0.9} metalness={0} />
+      </mesh>
+      {/* The horizontal ledge itself, jutting out at headroom height. */}
+      <mesh position={[ledgeCenterX, groundY + OVERHANG_CLEARANCE, worldZ]} castShadow receiveShadow>
+        <boxGeometry args={[spanI, 0.1, spanJ * 0.9]} />
+        <meshStandardMaterial color={CLASS_COLOR[OVERHANG_CLASS_ID]} roughness={0.9} metalness={0} />
+      </mesh>
+    </group>
+  )
+}
+
 const FOVEA_EXTENT_M = 22
 const FOVEA_GRID_N = 23
 const FOVEA_MAX_MARKERS = FOVEA_GRID_N * FOVEA_GRID_N
@@ -277,7 +395,7 @@ const PATH_GOAL: [number, number] = [PATH_GRID_HALF + 30, PATH_GRID_HALF + 17] /
 // direct route genuinely crosses the moving hazard's path at some point in the sequence.
 
 // Exaggerated for legibility at this dashboard's default camera distance,
-// the same reasoning HEIGHT_EXAGGERATION already applies to terrain relief:
+// the same reasoning HEIGHT_WORLD_SCALE already applies to terrain relief:
 // a true-scale ~0.4m body would read as an unreadable dot from this camera.
 const UGV_SCENE_SCALE = 5.5
 
@@ -490,8 +608,13 @@ export function Scene({ frame }: { frame: DemoFrame }) {
         shadow-mapSize-width={1024}
         shadow-mapSize-height={1024}
       />
-      <GroundGrid minHeight={heightfield.minHeight} />
+      {/* Reference-only: hidden on the default "terrain type" view so the
+          clean physical surface is what a first look actually shows;
+          available the moment any technical overlay is selected. */}
+      {overlayMode !== "class" && <GroundGrid minHeight={heightfield.minHeight} />}
       <Terrain heightfield={heightfield} />
+      <ObstacleMarkers frame={frame} heightfield={heightfield} />
+      <OverhangMarkers frame={frame} heightfield={heightfield} />
       <MotionMarkers frame={frame} heightfield={heightfield} />
       <HazardMarker frame={frame} heightfield={heightfield} />
       <FoveaOverlay />

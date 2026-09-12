@@ -154,7 +154,16 @@ export function generateSequence(nFrames = 48): DemoFrame[] {
           i,
           j,
           classId,
-          heightM: heightField(i, j) + (classId === 8 ? -0.6 : 0) + (classId === 9 ? 2.0 : 0),
+          // Only the trench gets a real physical height adjustment (an
+          // actual depression -- classId 9/OVERHANG deliberately does
+          // NOT bump ground height: an overhang is a ceiling/clearance
+          // hazard ABOVE the vehicle, not raised ground, and encoding it
+          // as +2m of terrain height was baking classification directly
+          // into geometry -- exactly what the GIS-portal redesign's own
+          // "separate terrain from classification" rule forbids. See
+          // Scene.tsx's OverhangMarkers for the real, separate physical
+          // representation.
+          heightM: heightField(i, j) + (classId === 8 ? -0.6 : 0),
           observability,
           sparsityVerdict: sparsityFor(rangeCells),
           isMoving: isPedestrianCell,

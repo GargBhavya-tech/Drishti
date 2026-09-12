@@ -100,38 +100,47 @@ export const DRISHTI_CLASS_NAMES = [
 
 export type DrishtiClassId = number
 
-// Muted earthy/technical palette, remapped so index 8 (NEGATIVE_OBSTACLE)
+// The base terrain tone every class colour is a close, subtle variant
+// of (Section 5 of the terrain-architecture redesign: "these are
+// intentionally close to one another"). Nothing here is more than a
+// short perceptual distance from this base -- strong colour is reserved
+// exclusively for the hazard/path accents, never for a terrain class.
+export const BASE_TERRAIN_COLOR = "#657268"
+
+// A tight, single-family palette, remapped so index 8 (NEGATIVE_OBSTACLE)
 // is the ONLY class using the hazard red -- reserved exclusively for
-// LETHAL, per Ticket #52's own "Watch out". Every other class sits in a
-// desaturated, recessive terrain family so nothing competes with the
-// hazard/path accents for attention.
+// LETHAL, per Ticket #52's own "Watch out" -- and even that is used only
+// for the legend swatch/marker, never as the terrain mesh's own fill
+// (see terrainFillColor below). Every class sits close to
+// BASE_TERRAIN_COLOR so classification reads as a subtle material
+// treatment on ONE terrain, not a set of differently-coloured 3D blocks.
 export const CLASS_COLOR: Record<DrishtiClassId, string> = {
-  0: "#9AA5AB", // UNKNOWN / not yet observed
-  1: "#64756A", // DRIVABLE
-  2: "#8C8368", // CAUTION -- rough, passable (between drivable and obstacle)
-  3: "#5B5548", // NON_TRAVERSABLE -- dark muted stone
-  4: "#6B6255", // STATIC_OBSTACLE
-  5: "#7D8F78", // VEGETATION
-  6: "#5C6B70", // VEHICLE -- muted steel (another moving platform)
-  7: "#A08F68", // PEDESTRIAN -- warm tan (attention-worthy, not full hazard)
-  8: "#C83C32", // NEGATIVE_OBSTACLE -- HAZARD, reserved exclusively for danger
-  9: "#6E6478", // OVERHANG -- muted violet-grey (overhead, distinct from ground obstacle)
+  0: "#9AA1A1", // UNKNOWN / not yet observed
+  1: "#748477", // DRIVABLE
+  2: "#7A7C6E", // CAUTION -- rough, passable (between drivable and obstacle)
+  3: "#6E6558", // NON_TRAVERSABLE
+  4: "#766B5B", // STATIC_OBSTACLE
+  5: "#7E8D76", // VEGETATION
+  6: "#6B7570", // VEHICLE -- another moving platform, still terrain-family
+  7: "#8A8069", // PEDESTRIAN -- warm tan, still terrain-family (not full hazard)
+  8: "#C83C32", // NEGATIVE_OBSTACLE -- HAZARD, reserved exclusively for danger (legend/marker only, see terrainFillColor)
+  9: "#837E8D", // OVERHANG -- a hint of violet-grey, still close to the family
 }
 
 const NEGATIVE_OBSTACLE_CLASS_ID = 8
 
 /** The terrain MESH's own fill colour -- identical to CLASS_COLOR
- * except the negative-obstacle class renders as muted ground, not the
- * saturated hazard accent. The hazard itself is communicated by the
+ * except the negative-obstacle class renders as plain base terrain, not
+ * the saturated hazard accent. The hazard itself is communicated by the
  * actual depression in the geometry plus a boundary ring/label (see
  * Scene.tsx's HazardMarker); painting the whole trench region solid red
- * on the terrain surface is exactly the "giant red box" the GIS-portal
- * redesign rules out. CLASS_COLOR itself (hazard red at index 8) stays
- * the source of truth for the legend swatch and the marker -- only the
- * terrain mesh's own fill decouples from it here. */
+ * on the terrain surface is exactly the "giant red box" the terrain-
+ * architecture redesign rules out. CLASS_COLOR itself (hazard red at
+ * index 8) stays the source of truth for the legend swatch and the
+ * marker -- only the terrain mesh's own fill decouples from it here. */
 export function terrainFillColor(classId: number): string {
-  if (classId === NEGATIVE_OBSTACLE_CLASS_ID) return CLASS_COLOR[3] // NON_TRAVERSABLE's muted stone tone -- disturbed ground, not a warning colour
-  return CLASS_COLOR[classId] ?? "#5b6472"
+  if (classId === NEGATIVE_OBSTACLE_CLASS_ID) return BASE_TERRAIN_COLOR
+  return CLASS_COLOR[classId] ?? BASE_TERRAIN_COLOR
 }
 
 export const OBSERVABILITY_COLOR = {
