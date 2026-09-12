@@ -19,9 +19,10 @@ import { costGridFromFrame, findPath } from "../lib/pathPlanner"
 import { smoothPath } from "../lib/pathSmoothing"
 import type { GridPoint } from "../lib/pathSmoothing"
 import { buildHeightfieldGeometry } from "../lib/terrainMesh"
-import { CLASS_COLOR, HAZARD_COLOR, OBSERVABILITY_COLOR, PATH_COLOR } from "../lib/theme"
+import { CLASS_COLOR, HAZARD_COLOR, OBSERVABILITY_COLOR, PATH_COLOR, SURFACE } from "../lib/theme"
 import type { OverlayMode } from "../state/store"
 import { useDashboardStore } from "../state/store"
+import { UgvModel } from "./UgvModel"
 
 const CELL_WORLD_SIZE = 0.32
 const HEIGHT_EXAGGERATION = 2.2
@@ -197,8 +198,8 @@ function HazardMarker({ frame }: { frame: DemoFrame }) {
         <meshStandardMaterial color={HAZARD_COLOR} emissive={HAZARD_COLOR} emissiveIntensity={0.35} roughness={0.5} />
       </mesh>
       <Html position={[0, 0.95, 0]} center distanceFactor={10} occlude={false}>
-        <div className="pointer-events-none select-none rounded-md border border-[#E05245]/50 bg-[#0D141B]/90 px-2.5 py-1.5 text-center whitespace-nowrap">
-          <div className="text-[10px] font-semibold tracking-widest text-[#E05245] uppercase">Trench &middot; High risk</div>
+        <div className="pointer-events-none select-none rounded-md border border-[#C83C32]/50 bg-[#0D141B]/90 px-2.5 py-1.5 text-center whitespace-nowrap">
+          <div className="text-[10px] font-semibold tracking-widest text-[#C83C32] uppercase">Trench &middot; High risk</div>
           <div className="text-[11px] font-mono-tech text-[#E7ECEE]">{distanceM.toFixed(0)} m</div>
         </div>
       </Html>
@@ -324,33 +325,33 @@ function PlannedPath({ frame }: { frame: DemoFrame }) {
   )
 }
 
-/** A compact top-down vehicle chevron -- position + heading, nothing
- * more. Replaces the old plain glowing sphere; sits at the current
- * (first) point of the planned route, oriented toward the next point. */
+// Exaggerated for legibility at this dashboard's default camera distance,
+// the same reasoning HEIGHT_EXAGGERATION already applies to terrain relief:
+// a true-scale ~0.4m body would read as an unreadable dot from ~20 world
+// units away.
+const UGV_SCENE_SCALE = 4.5
+
+/** The UGV -- position + heading, nothing more. Sits at the current
+ * (first) point of the planned route, oriented toward the next point.
+ * UgvModel's own forward axis is local +X; the inner group remaps that
+ * to this outer group's +Z-is-forward yaw convention (the same
+ * convention the rest of this file's markers already use). A flat
+ * ground ring in the navigation accent marks "current position" at a
+ * glance, independent of how small the model itself reads at a given
+ * zoom level. */
 function VehicleMarker({ position, heading }: { position: THREE.Vector3; heading: THREE.Vector3 }) {
   const yaw = Math.atan2(heading.x - position.x, heading.z - position.z)
   return (
-    <group position={[position.x, position.y + 0.02, position.z]} rotation={[0, yaw, 0]}>
-      <mesh rotation={[-Math.PI / 2, 0, 0]}>
-        <shapeGeometry
-          args={[
-            (() => {
-              const s = new THREE.Shape()
-              s.moveTo(0, 0.22)
-              s.lineTo(0.14, -0.16)
-              s.lineTo(0, -0.06)
-              s.lineTo(-0.14, -0.16)
-              s.closePath()
-              return s
-            })(),
-          ]}
-        />
-        <meshStandardMaterial color="#E7ECEE" roughness={0.6} metalness={0} />
+    <group position={[position.x, position.y, position.z]} rotation={[0, yaw, 0]}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}>
+        <ringGeometry args={[0.42, 0.48, 32]} />
+        <meshBasicMaterial color={PATH_COLOR} transparent opacity={0.7} side={THREE.DoubleSide} />
       </mesh>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0.001]}>
-        <ringGeometry args={[0.22, 0.25, 24]} />
-        <meshBasicMaterial color={PATH_COLOR} transparent opacity={0.8} side={THREE.DoubleSide} />
-      </mesh>
+      <group scale={UGV_SCENE_SCALE}>
+        <group rotation={[0, -Math.PI / 2, 0]}>
+          <UgvModel />
+        </group>
+      </group>
     </group>
   )
 }
@@ -427,9 +428,9 @@ export function Scene({ frame }: { frame: DemoFrame }) {
       dpr={[1, 1.75]}
       gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.25 }}
     >
-      <color attach="background" args={["#080D12"]} />
-      <fogExp2 attach="fog" args={["#080D12", 0.032]} />
-      <hemisphereLight args={["#2a3540", "#0a0d10", 0.55]} />
+      <color attach="background" args={[SURFACE.appBg]} />
+      <fogExp2 attach="fog" args={[SURFACE.appBg, 0.032]} />
+      <hemisphereLight args={["#3a4234", "#0a0d10", 0.55]} />
       <ambientLight intensity={0.25} />
       <directionalLight
         position={[-9, 18, 10]}

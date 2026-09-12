@@ -70,25 +70,25 @@ export function GovernorPanel({ frame }: { frame: DemoFrame }) {
 
   return (
     <motion.div
-      className="panel-glass p-3"
+      className="panel-light p-3"
       initial={{ opacity: 0, y: motionTokens.distance.sm }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: motionTokens.duration.normal, ease: motionTokens.easing.smooth }}
     >
-      <div className="text-[11px] uppercase tracking-widest text-[#96A3A8] mb-2 font-medium">Speed governor</div>
-      <div className="flex items-baseline justify-between py-1 border-b border-white/5">
-        <span className="text-[11px] uppercase tracking-wider text-slate-500">Terrain grip</span>
-        <span className="text-sm text-slate-200">
+      <div className="text-[11px] uppercase tracking-widest text-[#52606D] mb-2 font-semibold">Speed governor</div>
+      <div className="flex items-baseline justify-between py-1 border-b border-[#D9E2EC]">
+        <span className="text-[11px] uppercase tracking-wider text-[#52606D]">Terrain grip</span>
+        <span className="text-sm text-[#1F2933]">
           {bindingLabel} (mu {summary.mu.toFixed(2)})
         </span>
       </div>
-      <div className="flex items-baseline justify-between py-1 border-b border-white/5">
-        <span className="text-[11px] uppercase tracking-wider text-slate-500">Derated braking a_max</span>
-        <span className="text-sm text-slate-200">{summary.deratedAMs2.toFixed(2)} m/s^2</span>
+      <div className="flex items-baseline justify-between py-1 border-b border-[#D9E2EC]">
+        <span className="text-[11px] uppercase tracking-wider text-[#52606D]">Derated braking a_max</span>
+        <span className="text-sm text-[#1F2933]">{summary.deratedAMs2.toFixed(2)} m/s^2</span>
       </div>
       <div className="flex items-baseline justify-between py-1">
-        <span className="text-[11px] uppercase tracking-wider text-slate-500">Tightest corner</span>
-        <span className="text-sm text-slate-200">
+        <span className="text-[11px] uppercase tracking-wider text-[#52606D]">Tightest corner</span>
+        <span className="text-sm text-[#1F2933]">
           {hasCornerLimit
             ? `R ${summary.tightestRadiusM.toFixed(1)}m -> ${(summary.tightestVMaxMs * 3.6).toFixed(1)} km/h`
             : "no limit"}

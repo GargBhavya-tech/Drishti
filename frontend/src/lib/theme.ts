@@ -6,17 +6,30 @@
  * Class colors follow Build Map Ticket #52's own rule: class is
  * CATEGORICAL (hue), height is CONTINUOUS (a separate ramp), confidence
  * is a separate channel (alpha) -- never three variables in one hue
- * ramp. Palette is a muted mission-control system (2026-09 redesign):
- * terrain reads as recessive, desaturated ground; red is reserved
- * exclusively for LETHAL / NEGATIVE_OBSTACLE (matching the same
- * reservation this project's own Python backend makes for LETHAL in
- * planning/conservatism.py); cyan is reserved exclusively for the
- * planned route / active navigation state -- never decorative.
+ * ramp. Palette (2026-09 "engineering portal" redesign): a light
+ * institutional chrome (header/sidebar/bottom bar) frames a dark,
+ * earthy 3D sensor viewport -- the standard GIS/AV-ops convention of a
+ * light app shell around a dark data canvas, not a dark sci-fi HUD.
+ * Red is reserved exclusively for LETHAL / NEGATIVE_OBSTACLE (matching
+ * the same reservation this project's own Python backend makes for
+ * LETHAL in planning/conservatism.py); teal is reserved exclusively for
+ * the planned route / active navigation state -- never decorative.
  */
 
-// -- Mission-control surface tokens --------------------------------------
+// -- Institutional chrome tokens (header, sidebar, bottom bar) ----------
+export const CHROME = {
+  appBg: "#F3F5F6",
+  surface: "#FFFFFF",
+  navy: "#17324D",
+  navyDark: "#102A43",
+  text: "#1F2933",
+  textSecondary: "#52606D",
+  border: "#D9E2EC",
+} as const
+
+// -- The 3D sensor viewport's own dark, earthy world ---------------------
 export const SURFACE = {
-  appBg: "#080D12",
+  appBg: "#1B2119",
   panelBg: "#0D141B",
   panelBorder: "rgba(255,255,255,0.08)",
 } as const
@@ -27,13 +40,23 @@ export const TEXT = {
   muted: "#657278",
 } as const
 
-// The two semantic accents. Never reused decoratively -- see Ticket
-// "mission-control redesign"'s own rule: cyan means route/active-nav,
-// red means hazard/danger, nothing else borrows either.
-export const HAZARD_COLOR = "#E05245"
-export const PATH_COLOR = "#55D6E8"
+// The two semantic accents used everywhere -- in the 3D viewport AND in
+// the light chrome (as the sole accent color there too, replacing any
+// use of navy-as-decoration). Never reused decoratively -- teal means
+// route/active-nav, red means hazard/danger, nothing else borrows either.
+export const HAZARD_COLOR = "#C83C32"
+export const PATH_COLOR = "#087E8B"
 
 export const GRID_LINE_COLOR = "#536068"
+
+// The UGV model's own material palette (Section 1 of the engineering-
+// portal brief) -- kept separate from CLASS_COLOR since the vehicle is
+// not a terrain classification.
+export const VEHICLE_COLOR = {
+  body: "#3E4648",
+  dark: "#20272A",
+  highlight: "#7C8789",
+} as const
 
 export const motionTokens = {
   duration: {
@@ -77,22 +100,22 @@ export const DRISHTI_CLASS_NAMES = [
 
 export type DrishtiClassId = number
 
-// Muted mission-control palette, remapped so index 8 (NEGATIVE_OBSTACLE)
+// Muted earthy/technical palette, remapped so index 8 (NEGATIVE_OBSTACLE)
 // is the ONLY class using the hazard red -- reserved exclusively for
 // LETHAL, per Ticket #52's own "Watch out". Every other class sits in a
-// desaturated, recessive terrain family (greys, olives, mosses) so nothing
-// competes with the hazard/path accents for attention.
+// desaturated, recessive terrain family so nothing competes with the
+// hazard/path accents for attention.
 export const CLASS_COLOR: Record<DrishtiClassId, string> = {
-  0: "#343B40", // UNKNOWN / not yet observed -- cool slate
-  1: "#3B4840", // DRIVABLE -- muted sage
-  2: "#6B6248", // CAUTION -- muted khaki (rough, passable)
-  3: "#55524A", // NON_TRAVERSABLE -- dark muted stone
-  4: "#66645B", // STATIC_OBSTACLE -- muted obstacle grey
-  5: "#536052", // VEGETATION -- muted moss
-  6: "#4D5B66", // VEHICLE -- muted steel blue (another moving platform)
-  7: "#8A7A5A", // PEDESTRIAN -- muted warm tan (attention-worthy, not full hazard)
-  8: "#E05245", // NEGATIVE_OBSTACLE -- HAZARD, reserved exclusively for danger
-  9: "#5A5568", // OVERHANG -- muted violet-grey (overhead, distinct from ground obstacle)
+  0: "#9AA5AB", // UNKNOWN / not yet observed
+  1: "#64756A", // DRIVABLE
+  2: "#8C8368", // CAUTION -- rough, passable (between drivable and obstacle)
+  3: "#5B5548", // NON_TRAVERSABLE -- dark muted stone
+  4: "#6B6255", // STATIC_OBSTACLE
+  5: "#7D8F78", // VEGETATION
+  6: "#5C6B70", // VEHICLE -- muted steel (another moving platform)
+  7: "#A08F68", // PEDESTRIAN -- warm tan (attention-worthy, not full hazard)
+  8: "#C83C32", // NEGATIVE_OBSTACLE -- HAZARD, reserved exclusively for danger
+  9: "#6E6478", // OVERHANG -- muted violet-grey (overhead, distinct from ground obstacle)
 }
 
 export const OBSERVABILITY_COLOR = {

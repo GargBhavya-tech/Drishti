@@ -18,24 +18,24 @@ const TERRAIN_KEY: { label: string; color: string }[] = [
 
 export function Legend() {
   return (
-    <div className="panel-glass p-3">
-      <div className="text-[11px] uppercase tracking-widest text-[#96A3A8] mb-2 font-medium">Terrain key</div>
+    <div className="panel-light p-3">
+      <div className="text-[11px] uppercase tracking-widest text-[#52606D] mb-2 font-semibold">Terrain key</div>
       <div className="flex flex-col gap-1.5">
         {TERRAIN_KEY.map((item) => (
           <div key={item.label} className="flex items-center gap-2.5">
             <span className="h-2.5 w-2.5 rounded-sm flex-none" style={{ background: item.color }} />
-            <span className="text-[13px] text-[#E7ECEE]">{item.label}</span>
+            <span className="text-[13px] text-[#1F2933]">{item.label}</span>
           </div>
         ))}
-        <div className="flex items-center gap-2.5 pt-1 mt-1 border-t border-white/[0.06]">
+        <div className="flex items-center gap-2.5 pt-1 mt-1 border-t border-[#D9E2EC]">
           <span className="text-[13px] flex-none" style={{ color: HAZARD_COLOR }}>
             &#9888;
           </span>
-          <span className="text-[13px] text-[#E7ECEE]">Hazard</span>
+          <span className="text-[13px] text-[#1F2933]">Hazard</span>
         </div>
         <div className="flex items-center gap-2.5">
           <span className="h-[2px] w-3 flex-none" style={{ background: PATH_COLOR }} />
-          <span className="text-[13px] text-[#E7ECEE]">Safe path</span>
+          <span className="text-[13px] text-[#1F2933]">Safe path</span>
         </div>
       </div>
     </div>

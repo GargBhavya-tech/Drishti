@@ -21,32 +21,36 @@ import { useEffect, useRef, useState } from "react"
 import * as THREE from "three"
 import type { RealFrame, RealManifest } from "../lib/realData"
 import { loadFrame, loadManifest } from "../lib/realData"
-import { PATH_COLOR } from "../lib/theme"
+import { PATH_COLOR, SURFACE } from "../lib/theme"
 import { RealPointCloud } from "./RealPointCloud"
 import { RealTerrain } from "./RealTerrain"
+import { UgvModel } from "./UgvModel"
 import { VariableResGrid } from "./VariableResGrid"
 
-/** A compact vehicle marker at the ego origin -- every exported real
- * frame is in the sensor/ego frame (see realData.ts's own doc comment),
- * so the vehicle is, by construction, always at (0, 0, 0). */
+const UGV_REAL_SCALE = 3.5 // real-world scale (REAL_WORLD_SCALE) reads the UGV's 0.42m body too small at this camera distance otherwise
+
+/** The UGV at the ego origin -- every exported real frame is in the
+ * sensor/ego frame (see realData.ts's own doc comment), so the vehicle
+ * is, by construction, always at (0, 0, 0), facing UgvModel's own
+ * native +X-forward direction (this codebase's established sensor-
+ * frame convention -- see RealPointCloud.tsx's own comment). */
 function RealVehicleMarker() {
   return (
-    <group position={[0, 0.03, 0]}>
-      <mesh rotation={[-Math.PI / 2, 0, 0]}>
-        <coneGeometry args={[0.12, 0.28, 3]} />
-        <meshStandardMaterial color="#E7ECEE" roughness={0.6} metalness={0} />
+    <group position={[0, 0, 0]}>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}>
+        <ringGeometry args={[0.42, 0.48, 32]} />
+        <meshBasicMaterial color={PATH_COLOR} transparent opacity={0.7} side={THREE.DoubleSide} />
       </mesh>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0, 0.001]}>
-        <ringGeometry args={[0.2, 0.23, 24]} />
-        <meshBasicMaterial color={PATH_COLOR} transparent opacity={0.8} side={THREE.DoubleSide} />
-      </mesh>
+      <group scale={UGV_REAL_SCALE}>
+        <UgvModel />
+      </group>
     </group>
   )
 }
 
 function LoadingOverlay({ message }: { message: string }) {
   return (
-    <div className="absolute inset-0 flex items-center justify-center bg-[#080D12]">
+    <div className="absolute inset-0 flex items-center justify-center bg-[#1B2119]">
       <div className="text-[#96A3A8] text-sm max-w-sm text-center px-6">{message}</div>
     </div>
   )
@@ -154,8 +158,8 @@ export function RealScene() {
         dpr={[1, 1.75]}
         gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.2 }}
       >
-        <color attach="background" args={["#080D12"]} />
-        <fogExp2 attach="fog" args={["#080D12", 0.055]} />
+        <color attach="background" args={[SURFACE.appBg]} />
+        <fogExp2 attach="fog" args={[SURFACE.appBg, 0.055]} />
         <hemisphereLight args={["#2a3540", "#0a0d10", 0.5]} />
         <ambientLight intensity={0.22} />
         <directionalLight position={[-6, 12, 7]} intensity={1.75} />

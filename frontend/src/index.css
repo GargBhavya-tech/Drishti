@@ -9,8 +9,8 @@ body,
 #root {
   height: 100%;
   margin: 0;
-  background: #080d12;
-  color: #e7ecee;
+  background: #f3f5f6;
+  color: #1f2933;
   font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
@@ -31,6 +31,15 @@ body,
   border-radius: 9px;
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
+}
+
+/* The light institutional chrome's own flat, bordered panel -- a
+   technical panel, not a soft SaaS card: no shadow-as-decoration, one
+   hairline border, minimal radius. Used by every sidebar card. */
+.panel-light {
+  background: #ffffff;
+  border: 1px solid #d9e2ec;
+  border-radius: 6px;
 }
 
 /* Thin, unobtrusive scrollbars for any overflowing panel content. */

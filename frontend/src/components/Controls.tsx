@@ -31,7 +31,7 @@ function IconButton({
       whileTap={{ scale: 0.94 }}
       transition={{ duration: motionTokens.duration.fast, ease: motionTokens.easing.sharp }}
       className={`h-9 w-9 flex items-center justify-center rounded-full border transition-colors ${
-        active ? "border-cyan-400/60 bg-cyan-400/10 text-cyan-300" : "border-white/10 bg-white/5 text-slate-300"
+        active ? "border-[#087E8B]/50 bg-[#087E8B]/10 text-[#087E8B]" : "border-[#D9E2EC] bg-white text-[#52606D]"
       }`}
     >
       {children}
@@ -140,9 +140,9 @@ export function Timeline({ frameCount }: { frameCount: number }) {
           onChange={(e) => {
             setFrameIndex(Number(e.target.value))
           }}
-          className="flex-1 accent-cyan-400"
+          className="flex-1 accent-[#087E8B]"
         />
-        <span className="font-mono-tech text-xs text-slate-400 w-16 text-right">
+        <span className="font-mono-tech text-xs text-[#52606D] w-16 text-right">
           {String(frameIndex + 1).padStart(2, "0")}/{frameCount}
         </span>
       </div>
@@ -156,7 +156,7 @@ export function GammaSlider() {
 
   return (
     <div className="flex items-center gap-3 min-w-[220px]">
-      <span className="text-[11px] uppercase tracking-wider text-slate-500 font-mono-tech">gamma</span>
+      <span className="text-[11px] uppercase tracking-wider text-[#52606D] font-mono-tech">gamma</span>
       <input
         type="range"
         min={0}
@@ -164,18 +164,18 @@ export function GammaSlider() {
         step={0.05}
         value={gamma}
         onChange={(e) => setGamma(Number(e.target.value))}
-        className="w-32 accent-amber-400"
+        className="w-32 accent-[#17324D]"
       />
       <motion.span
         key={gamma.toFixed(2)}
         initial={{ opacity: 0.3 }}
         animate={{ opacity: 1 }}
-        className="font-mono-tech text-sm text-amber-300 w-12"
+        className="font-mono-tech text-sm text-[#17324D] w-12"
       >
         {gamma.toFixed(2)}
       </motion.span>
       {gamma !== DEFAULT_GAMMA && (
-        <button onClick={() => setGamma(DEFAULT_GAMMA)} className="text-[10px] text-slate-500 underline underline-offset-2">
+        <button onClick={() => setGamma(DEFAULT_GAMMA)} className="text-[10px] text-[#52606D] underline underline-offset-2">
           reset
         </button>
       )}
@@ -209,12 +209,12 @@ function PillButton({
       transition={{ duration: motionTokens.duration.fast, ease: motionTokens.easing.sharp }}
       className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-medium transition-colors ${
         active
-          ? "border-[#55D6E8]/50 bg-[#55D6E8]/10 text-[#55D6E8]"
-          : "border-white/10 bg-white/5 text-[#96A3A8]"
+          ? "border-[#087E8B]/50 bg-[#087E8B]/10 text-[#087E8B]"
+          : "border-[#D9E2EC] bg-white text-[#52606D]"
       }`}
     >
       {icon}
-      {label}
+      <span className="tracking-wide">[ {label.toUpperCase()} ]</span>
     </motion.button>
   )
 }

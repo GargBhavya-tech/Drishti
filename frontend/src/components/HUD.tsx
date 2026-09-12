@@ -37,9 +37,9 @@ function AnimatedNumber({ value, decimals = 2, suffix = "" }: { value: number; d
 
 function StatRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-baseline justify-between py-1 border-b border-white/5 last:border-0">
-      <span className="text-[11px] uppercase tracking-wider text-slate-500">{label}</span>
-      <span className="text-sm text-slate-200">{children}</span>
+    <div className="flex items-baseline justify-between py-1 border-b border-[#D9E2EC] last:border-0">
+      <span className="text-[11px] uppercase tracking-wider text-[#52606D]">{label}</span>
+      <span className="text-sm text-[#1F2933]">{children}</span>
     </div>
   )
 }
@@ -60,17 +60,17 @@ function OverlayToggle({ id, label }: { id: OverlayMode; label: string }) {
   return (
     <button
       onClick={() => setOverlayMode(id)}
-      className="relative w-full text-left px-2.5 py-1.5 rounded-md text-xs text-slate-300 overflow-hidden"
+      className="relative w-full text-left px-2.5 py-1.5 rounded-md text-xs text-[#52606D] overflow-hidden"
     >
       {active && (
         <motion.span
           layoutId="overlay-active-pill"
-          className="absolute inset-0 bg-[#55D6E8]/15 border border-[#55D6E8]/40 rounded-md"
+          className="absolute inset-0 bg-[#087E8B]/10 border border-[#087E8B]/40 rounded-md"
           transition={{ duration: motionTokens.duration.fast, ease: motionTokens.easing.smooth }}
         />
       )}
-      <span className="relative z-10 flex items-center gap-2">
-        <span className={`h-1.5 w-1.5 rounded-full ${active ? "bg-[#55D6E8]" : "bg-slate-600"}`} />
+      <span className="relative z-10 flex items-center gap-2" style={active ? { color: "#17324D" } : undefined}>
+        <span className={`h-1.5 w-1.5 rounded-full ${active ? "bg-[#087E8B]" : "bg-[#9AA5AB]"}`} />
         {label}
       </span>
     </button>
@@ -93,12 +93,12 @@ export function HUD({ hud, frameIndex, frameCount }: { hud: HudStats; frameIndex
   return (
     <div className="flex flex-col gap-3">
       <motion.div
-        className="panel-glass p-3"
+        className="panel-light p-3"
         initial={{ opacity: 0, y: -motionTokens.distance.sm }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: motionTokens.duration.normal, ease: motionTokens.easing.smooth }}
       >
-        <div className="text-[11px] uppercase tracking-widest text-[#96A3A8] mb-2 font-medium">Engineering telemetry</div>
+        <div className="text-[11px] uppercase tracking-widest text-[#52606D] mb-2 font-semibold">Engineering telemetry</div>
         <StatRow label="Frame">
           {frameIndex + 1} / {frameCount}
         </StatRow>
@@ -114,7 +114,7 @@ export function HUD({ hud, frameIndex, frameCount }: { hud: HudStats; frameIndex
         </StatRow>
         <StatRow label="Stamp mismatches">
           <motion.span
-            animate={flash ? { color: "#ff5c5c", scale: 1.15 } : { color: "#e2e8f0", scale: 1 }}
+            animate={flash ? { color: "#C83C32", scale: 1.15 } : { color: "#1F2933", scale: 1 }}
             transition={{ duration: motionTokens.duration.fast }}
             className="inline-block font-mono-tech"
           >
@@ -125,12 +125,12 @@ export function HUD({ hud, frameIndex, frameCount }: { hud: HudStats; frameIndex
       </motion.div>
 
       <motion.div
-        className="panel-glass p-3"
+        className="panel-light p-3"
         initial={{ opacity: 0, y: -motionTokens.distance.sm }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: motionTokens.duration.normal, ease: motionTokens.easing.smooth, delay: 0.05 }}
       >
-        <div className="text-[11px] uppercase tracking-widest text-[#96A3A8] mb-2 font-medium">View layer</div>
+        <div className="text-[11px] uppercase tracking-widest text-[#52606D] mb-2 font-semibold">View layer</div>
         <div className="flex flex-col gap-1">
           {OVERLAY_OPTIONS.map((opt) => (
             <OverlayToggle key={opt.id} id={opt.id} label={opt.label} />

@@ -41,17 +41,17 @@ export function SystemStatus({ frame }: { frame: DemoFrame }) {
   const subsystems = useSubsystems(frame)
 
   return (
-    <div className="panel-glass p-3">
-      <div className="text-[11px] uppercase tracking-widest text-[#96A3A8] mb-2 font-medium">System status</div>
+    <div className="panel-light p-3">
+      <div className="text-[11px] uppercase tracking-widest text-[#52606D] mb-2 font-semibold">System status</div>
       <div className="flex flex-col gap-1.5">
         {subsystems.map((s) => (
           <div key={s.label} className="flex items-center justify-between">
-            <span className="text-[13px] text-[#E7ECEE]">{s.label}</span>
+            <span className="text-[13px] text-[#1F2933]">{s.label}</span>
             <span
               className="flex items-center gap-1.5 text-[11px] font-mono-tech uppercase tracking-wide"
-              style={{ color: s.online ? "#55D6E8" : "#E05245" }}
+              style={{ color: s.online ? "#087E8B" : "#C83C32" }}
             >
-              <span className="h-1.5 w-1.5 rounded-full" style={{ background: s.online ? "#55D6E8" : "#E05245" }} />
+              <span className="h-1.5 w-1.5 rounded-full" style={{ background: s.online ? "#087E8B" : "#C83C32" }} />
               {s.online ? "Online" : "Degraded"}
             </span>
           </div>

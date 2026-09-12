@@ -45,9 +45,59 @@ export interface HeightfieldOptions {
   fallbackColor: THREE.Color
 }
 
+/** Fills every unset (decimated/missing) vertex's height by averaging
+ * its already-set immediate neighbours, iterating outward a few passes
+ * so a hole of more than one cell still fills in smoothly rather than
+ * staying flat. A vertex that ends a pass with no set neighbour at all
+ * (an entirely empty region, e.g. genuinely unobserved far terrain)
+ * keeps height 0 -- flat ground, which is the honest thing to show for
+ * "no data here", not a fabricated hazard or ridge. This is what turns
+ * a sparse/decimated source grid into smooth terrain instead of a
+ * field of spikes: an isolated real cell surrounded by unset (flat)
+ * neighbours would otherwise render as a lone spike jutting out of flat
+ * ground once normals are computed. */
+function fillUnsetHeights(heights: Float32Array, set: Uint8Array, width: number, depth: number): void {
+  const MAX_PASSES = 3
+  let remaining = new Set<number>()
+  for (let i = 0; i < set.length; i++) if (!set[i]) remaining.add(i)
+
+  for (let pass = 0; pass < MAX_PASSES && remaining.size > 0; pass++) {
+    const resolvedThisPass: [number, number][] = []
+    for (const idx of remaining) {
+      const ix = idx % width
+      const iz = Math.floor(idx / width)
+      let sum = 0
+      let count = 0
+      const neighbors: [number, number][] = [
+        [ix - 1, iz], [ix + 1, iz], [ix, iz - 1], [ix, iz + 1],
+      ]
+      for (const [nx, nz] of neighbors) {
+        if (nx < 0 || nx >= width || nz < 0 || nz >= depth) continue
+        const nIdx = nz * width + nx
+        if (set[nIdx]) {
+          sum += heights[nIdx]
+          count++
+        }
+      }
+      if (count > 0) resolvedThisPass.push([idx, sum / count])
+    }
+    for (const [idx, avgHeight] of resolvedThisPass) {
+      heights[idx] = avgHeight
+      set[idx] = 1 // provisionally set -- lets the NEXT pass use it too
+      remaining.delete(idx)
+    }
+    if (resolvedThisPass.length === 0) break // no progress possible -- stop early
+  }
+}
+
 /** Builds one continuous heightfield BufferGeometry covering
  * [minGx..maxGx] x [minGy..maxGy]. Cells not present in `cells` are
- * filled flat with `fallbackColor` so the surface has no holes. */
+ * filled by averaging populated neighbours (never left at a hard flat
+ * 0), so a decimated/sparse source grid never reads as an isolated
+ * spike poking out of flat ground -- see this function's own doc
+ * comment on `fillUnsetHeights` for why. Only a vertex with NO
+ * populated neighbour at all (a genuinely empty region) falls back to
+ * flat ground with `fallbackColor`. */
 export function buildHeightfieldGeometry(cells: HeightCell[], opts: HeightfieldOptions): THREE.BufferGeometry {
   const width = opts.maxGx - opts.minGx + 1
   const depth = opts.maxGy - opts.minGy + 1
@@ -55,6 +105,7 @@ export function buildHeightfieldGeometry(cells: HeightCell[], opts: HeightfieldO
 
   const heights = new Float32Array(nVerts)
   const colors = new Float32Array(nVerts * 3)
+  const set = new Uint8Array(nVerts)
   for (let i = 0; i < nVerts; i++) {
     colors[i * 3] = opts.fallbackColor.r
     colors[i * 3 + 1] = opts.fallbackColor.g
@@ -70,7 +121,10 @@ export function buildHeightfieldGeometry(cells: HeightCell[], opts: HeightfieldO
     colors[idx * 3] = cell.color.r
     colors[idx * 3 + 1] = cell.color.g
     colors[idx * 3 + 2] = cell.color.b
+    set[idx] = 1
   }
+
+  fillUnsetHeights(heights, set, width, depth)
 
   const positions = new Float32Array(nVerts * 3)
   for (let iz = 0; iz < depth; iz++) {

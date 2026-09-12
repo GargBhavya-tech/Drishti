@@ -42,7 +42,7 @@ export function MissionStatus({ frame }: { frame: DemoFrame }) {
       <motion.span
         key={status.level}
         className="h-2.5 w-2.5 rounded-full flex-none"
-        animate={{ backgroundColor: isHazard ? "#E05245" : "#55D6E8" }}
+        animate={{ backgroundColor: isHazard ? "#C83C32" : "#087E8B" }}
         transition={{ duration: motionTokens.duration.fast }}
       />
       <div className="flex items-baseline gap-2.5 flex-wrap">
@@ -51,12 +51,12 @@ export function MissionStatus({ frame }: { frame: DemoFrame }) {
           initial={{ opacity: 0, y: -4 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: motionTokens.duration.normal, ease: motionTokens.easing.smooth }}
-          className="font-sans text-[22px] leading-none font-semibold tracking-tight uppercase"
-          style={{ color: isHazard ? "#E05245" : "#E7ECEE" }}
+          className="font-sans text-[20px] leading-none font-semibold tracking-tight uppercase"
+          style={{ color: isHazard ? "#C83C32" : "#17324D" }}
         >
           {status.headline}
         </motion.span>
-        <span className="text-[13px] text-[#96A3A8]">
+        <span className="text-[13px] text-[#52606D]">
           {status.detail}
           {status.distanceM !== null && ` · ${status.distanceM.toFixed(0)}m ahead`}
         </span>
