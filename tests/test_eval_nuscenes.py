@@ -41,7 +41,8 @@ def test_model_forward_hdl32e_shape():
     """Verify FusionSegNet accepts a 32x1080 range image without crashing."""
     model = FusionSegNet(n_classes=N_CLASSES_DEFAULT)
     model.eval()
-    dummy_input = torch.randn(1, 9, 32, 1080)
+    in_channels = model.stem[0].in_channels
+    dummy_input = torch.randn(1, in_channels, 32, 1080)
     with torch.no_grad():
         out = model(dummy_input)
     assert out.shape == (1, N_CLASSES_DEFAULT, 32, 1080)
