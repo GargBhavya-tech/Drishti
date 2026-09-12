@@ -370,9 +370,10 @@ class FusionSegNet(nn.Module):
         self.upf = nn.ConvTranspose2d(32, 32, 2, 2)
         self.clf = nn.Conv2d(32, n_classes, 1)
 
-    def forward(self, x, return_attention: bool = False):
-        """`return_attention=False` (the default) is BIT-FOR-BIT the
-        original method -- every existing caller is unaffected.
+    def forward(self, x, return_attention: bool = False, return_features: bool = False):
+        """`return_attention=False, return_features=False` (both
+        defaults) is BIT-FOR-BIT the original method -- every existing
+        caller is unaffected by either flag.
         `return_attention=True` additionally returns a dict of the four
         decoder stages' own attention maps ("ag1".."ag4", finest to
         coarsest skip connection), each already a real [0, 1] per-pixel
@@ -380,6 +381,14 @@ class FusionSegNet(nn.Module):
         saliency method bolted on afterward. Explainability tooling
         (eval/checkpoint_attention_overlay.py) is the only intended
         caller of this flag; training/inference call sites never pass it.
+        `return_features=True` additionally returns the final 32-channel
+        decoder feature tensor (same spatial resolution as `out`, the
+        tensor `self.clf` was computed from) as the LAST element of
+        whatever tuple this call would otherwise have returned -- the
+        tap point the detection head (perception/detection_head.py)
+        shares this backbone through, added rather than duplicating this
+        method's encode-decode logic in a second file that could drift
+        out of sync with it.
         """
         input_hw = x.shape[2:]
         e1 = self.e1(x)
@@ -423,11 +432,20 @@ class FusionSegNet(nn.Module):
 
         x = _match_size(self.upf(x), input_hw)  # final decode targets the ORIGINAL input resolution
         out = self.clf(x)
+        decoder_features = x  # detection-head tap point -- see return_features docstring above
 
         if return_attention:
             if self.training:
-                return out, aux, attention_maps
-            return out, attention_maps
-        if self.training:
-            return out, aux  # deep supervision: both heads during training
-        return out
+                result = (out, aux, attention_maps)
+            else:
+                result = (out, attention_maps)
+        elif self.training:
+            result = (out, aux)  # deep supervision: both heads during training
+        else:
+            result = out
+
+        if return_features:
+            if isinstance(result, tuple):
+                return (*result, decoder_features)
+            return (result, decoder_features)
+        return result
