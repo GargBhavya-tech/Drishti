@@ -46,6 +46,7 @@ def main():
     parser.add_argument("--detection-checkpoint", default="checkpoints_detection/best.pt")
     parser.add_argument("--stats-path", default="checkpoints_joint/channel_stats.json")
     parser.add_argument("--objectness-threshold", type=float, default=0.5)
+    parser.add_argument("--nms-pool-size", type=int, default=5, help="perception.detection_decode.decode_detections's nms_pool_size")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--out-dir", default="eval/out")
@@ -90,7 +91,8 @@ def main():
             point_xyz_at_pixel[touched] = sweep.xyz[img.point_index[touched]]
 
             detections = decode_detections(
-                pred[0].cpu(), seg_classes, point_xyz_at_pixel, objectness_threshold=args.objectness_threshold
+                pred[0].cpu(), seg_classes, point_xyz_at_pixel,
+                objectness_threshold=args.objectness_threshold, nms_pool_size=args.nms_pool_size,
             )
 
             box_targets = build_box_targets(nusc, sample_token, sweep.xyz, img)
