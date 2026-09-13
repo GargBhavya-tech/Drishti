@@ -1,18 +1,21 @@
 /**
  * RealTerrain.tsx -- renders the REAL exported multi-resolution grid
- * (eval/export_frames.py's cells_{i}.bin) as one InstancedMesh PER
- * REAL SCHEDULE LEVEL -- four separately-sized box fields, each using
- * that level's own real cell_size_m, real height, real majority class.
- * This is the first time this project's variable-resolution claim is
- * actually VISIBLE: all four real resolution tiers rendered
- * simultaneously, at their real relative sizes, from real data -- not
- * the single uniform synthetic grid the mock demo (Scene.tsx's
- * CellField) has shown until now.
+ * (eval/export_frames.py's cells_{i}.bin, or accumulated_cells_{i}.bin
+ * when `useAccumulated` is set) as one InstancedMesh PER REAL SCHEDULE
+ * LEVEL -- four separately-sized box fields, each using that level's
+ * own real cell_size_m, real height, real majority class. This is the
+ * first time this project's variable-resolution claim is actually
+ * VISIBLE: all four real resolution tiers rendered simultaneously, at
+ * their real relative sizes, from real data -- not the single uniform
+ * synthetic grid the mock demo (Scene.tsx's CellField) has shown until
+ * now.
  *
- * Scope note (see export_frames.py's own docstring): each level's
- * cells come from ONE sweep's real points binned once by the real
- * Nyquist-radius schedule rule, not a live temporally-accumulated
- * clipmap -- an honest single-frame snapshot, not a scrolling map.
+ * `useAccumulated`: when true, sources cells from `frame.accumulatedCells`
+ * (export_frames.py's `_WorldCellMemory`, real multi-frame world-frame
+ * memory reprojected into this frame's own sensor-local coordinates)
+ * instead of `frame.cells` (this frame's own single-sweep snapshot) --
+ * the SAME rendering code either way, since both arrays share the
+ * identical 5-float schema; only the DATA differs, not the component.
  */
 
 import { useEffect, useMemo, useRef } from "react"
@@ -30,7 +33,17 @@ import { CLASS_COLOR } from "../lib/theme"
 const MAX_INSTANCES_PER_LEVEL = [50_000, 6_000, 1_200, 300]
 const HEIGHT_EXAGGERATION = 2.5
 
-function LevelField({ frame, level, levelInfo }: { frame: RealFrame; level: number; levelInfo: LevelInfo }) {
+function LevelField({
+  frame,
+  level,
+  levelInfo,
+  useAccumulated,
+}: {
+  frame: RealFrame
+  level: number
+  levelInfo: LevelInfo
+  useAccumulated: boolean
+}) {
   const meshRef = useRef<THREE.InstancedMesh>(null)
   const dummy = useMemo(() => new THREE.Object3D(), [])
   const maxInstances = MAX_INSTANCES_PER_LEVEL[level] ?? 2000
@@ -39,16 +52,17 @@ function LevelField({ frame, level, levelInfo }: { frame: RealFrame; level: numb
   useEffect(() => {
     const mesh = meshRef.current
     if (!mesh) return
+    const cellData = useAccumulated ? frame.accumulatedCells : frame.cells
+    const nCells = useAccumulated ? frame.accumulatedCellCount : frame.cellCount
     let count = 0
-    const nCells = frame.cellCount
     for (let i = 0; i < nCells && count < maxInstances; i++) {
       const off = i * 5
-      const cellLevel = frame.cells[off]
+      const cellLevel = cellData[off]
       if (Math.round(cellLevel) !== level) continue
-      const gx = frame.cells[off + 1]
-      const gy = frame.cells[off + 2]
-      const heightM = frame.cells[off + 3]
-      const classId = frame.cells[off + 4]
+      const gx = cellData[off + 1]
+      const gy = cellData[off + 2]
+      const heightM = cellData[off + 3]
+      const classId = cellData[off + 4]
 
       const worldX = (gx + 0.5) * levelInfo.cellSizeM * REAL_WORLD_SCALE
       const worldZ = (gy + 0.5) * levelInfo.cellSizeM * REAL_WORLD_SCALE
@@ -70,7 +84,7 @@ function LevelField({ frame, level, levelInfo }: { frame: RealFrame; level: numb
     }
     mesh.instanceMatrix.needsUpdate = true
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true
-  }, [frame, level, levelInfo, dummy, maxInstances, cellWorldSize])
+  }, [frame, level, levelInfo, dummy, maxInstances, cellWorldSize, useAccumulated])
 
   return (
     <instancedMesh ref={meshRef} args={[undefined, undefined, maxInstances]}>
@@ -80,11 +94,19 @@ function LevelField({ frame, level, levelInfo }: { frame: RealFrame; level: numb
   )
 }
 
-export function RealTerrain({ frame, levels }: { frame: RealFrame; levels: LevelInfo[] }) {
+export function RealTerrain({
+  frame,
+  levels,
+  useAccumulated = false,
+}: {
+  frame: RealFrame
+  levels: LevelInfo[]
+  useAccumulated?: boolean
+}) {
   return (
     <>
       {levels.map((levelInfo) => (
-        <LevelField key={levelInfo.level} frame={frame} level={levelInfo.level} levelInfo={levelInfo} />
+        <LevelField key={levelInfo.level} frame={frame} level={levelInfo.level} levelInfo={levelInfo} useAccumulated={useAccumulated} />
       ))}
     </>
   )

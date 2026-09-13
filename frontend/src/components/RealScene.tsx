@@ -21,6 +21,7 @@ import { useEffect, useRef, useState } from "react"
 import * as THREE from "three"
 import type { RealFrame, RealManifest } from "../lib/realData"
 import { loadFrame, loadManifest } from "../lib/realData"
+import { DetectionMarkers } from "./DetectionMarkers"
 import { RealPointCloud } from "./RealPointCloud"
 import { RealTerrain } from "./RealTerrain"
 import { VariableResGrid } from "./VariableResGrid"
@@ -69,13 +70,16 @@ function RealPlaybackBar({
   )
 }
 
-function RealLegend({ manifest }: { manifest: RealManifest }) {
+function RealLegend({ manifest, detectionCount }: { manifest: RealManifest; detectionCount: number }) {
   return (
     <div className="absolute top-3 left-3 rounded-xl border border-white/10 bg-black/40 backdrop-blur-md px-3 py-2 max-w-xs">
       <div className="text-[11px] uppercase tracking-widest text-cyan-400/80 mb-1">Real data</div>
       <div className="text-[11px] text-slate-400 leading-relaxed">
         Real RELLIS-3D LiDAR + real FusionSegNet (checkpoint epoch {manifest.trainedEpoch}). Points, terrain, and
         resolution rings are computed from a real trained model on real off-road data -- not synthetic.
+      </div>
+      <div className="text-[11px] text-amber-300/90 mt-1">
+        {detectionCount} real object detection{detectionCount === 1 ? "" : "s"} this frame (wireframe boxes, geometric detector)
       </div>
     </div>
   )
@@ -87,6 +91,11 @@ export function RealScene() {
   const [frameIndex, setFrameIndex] = useState(0)
   const [isPlaying, setIsPlaying] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Toggles between this frame's own single-sweep cells and the real
+  // multi-frame world-frame memory (export_frames.py's _WorldCellMemory)
+  // -- off by default so the existing single-sweep view is unchanged
+  // unless a viewer explicitly asks to see accumulation.
+  const [useAccumulated, setUseAccumulated] = useState(false)
   const rafRef = useRef<number | null>(null)
   const lastTickRef = useRef(0)
 
@@ -142,8 +151,9 @@ export function RealScene() {
         <pointLight position={[-8, 6, -8]} intensity={0.2} color="#4fd1ff" />
 
         <VariableResGrid levels={manifest.levels} />
-        <RealTerrain frame={frame} levels={manifest.levels} />
+        <RealTerrain frame={frame} levels={manifest.levels} useAccumulated={useAccumulated} />
         <RealPointCloud frame={frame} />
+        <DetectionMarkers frame={frame} />
 
         <OrbitControls enableDamping dampingFactor={0.08} minDistance={2} maxDistance={35} maxPolarAngle={Math.PI / 2.05} />
 
@@ -151,7 +161,14 @@ export function RealScene() {
           <Bloom luminanceThreshold={0.7} luminanceSmoothing={0.2} intensity={0.35} mipmapBlur />
         </EffectComposer>
       </Canvas>
-      <RealLegend manifest={manifest} />
+      <button
+        onClick={() => setUseAccumulated((v) => !v)}
+        className="absolute top-3 right-3 rounded-lg border border-white/10 bg-black/40 backdrop-blur-md px-3 py-1.5 text-[11px] font-mono-tech text-slate-200"
+        title="Toggle between this frame's own single-sweep cells and the real multi-frame world-frame memory (export_frames.py's _WorldCellMemory)"
+      >
+        {useAccumulated ? "● Live memory (accumulated)" : "○ Single-sweep snapshot"}
+      </button>
+      <RealLegend manifest={manifest} detectionCount={frame.detectionCount} />
       <RealPlaybackBar
         frameIndex={frameIndex}
         frameCount={manifest.nFrames}
