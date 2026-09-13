@@ -327,7 +327,7 @@ def test_a_deliberately_broken_cost_function_is_caught_by_the_property(vehicle):
 
 
 @given(prior=cell_states(), fresh=cell_states(), dt_s=st.floats(min_value=0.0, max_value=100.0, allow_nan=False))
-@settings(max_examples=10_000)
+@settings(max_examples=10_000, deadline=None)  # same real, machine-load-dependent Hypothesis timing flake as test_cost_is_monotone_under_information_loss's own fix -- this sibling test never got it applied
 def test_merge_with_prior_never_lowers_cost_below_prior(prior, fresh, dt_s):
     """For ANY prior/fresh pair (not just the two real cases that found
     this gap), merging must never let the reported cost drop below what
