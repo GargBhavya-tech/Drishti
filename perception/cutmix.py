@@ -128,14 +128,34 @@ def paste_rare_cluster(
     clusters: RareClusterSet,
     target_class: int,
     rng: np.random.Generator,
+    min_range_m: float = MIN_PLACEMENT_RANGE_M,
+    max_range_m: float = MAX_PLACEMENT_RANGE_M,
 ) -> Tuple[Sweep, np.ndarray]:
     """Picks one random cluster, one random (range, azimuth) placement
-    within [MIN_PLACEMENT_RANGE_M, MAX_PLACEMENT_RANGE_M), estimates the
-    real local ground height there from `sweep`'s OWN points, and
-    returns a NEW Sweep with the cluster's points appended (translated
-    to that location) plus a matching (N,) per-point label array (the
-    original real per-point labels, extended with `target_class` for
-    every pasted point).
+    within [min_range_m, max_range_m) (defaults to the original
+    [MIN_PLACEMENT_RANGE_M, MAX_PLACEMENT_RANGE_M) -- existing class-4
+    CutMix callers that don't pass these get byte-identical placement
+    behaviour), estimates the real local ground height there from
+    `sweep`'s OWN points, and returns a NEW Sweep with the cluster's
+    points appended (translated to that location) plus a matching (N,)
+    per-point label array (the original real per-point labels, extended
+    with `target_class` for every pasted point).
+
+    The `min_range_m`/`max_range_m` override exists for the VEHICLE
+    copy-paste augmentation (DRISHTI_MASTER_BIBLE.md Part G.19): the
+    real diagnosed failure (Part G.17) is concentrated at 10-30m, not
+    class 4's original 3-15m placement band, so that augmentation
+    targets [10, 30) directly rather than reusing the class-4 default.
+
+    Occlusion note (unchanged from the module docstring): because this
+    pastes real points into the RAW sweep BEFORE
+    `perception.range_image.project_to_range_image`'s own nearest-
+    return-per-pixel z-buffering, any real background point that would
+    have been occluded by the pasted cluster along the same ray is
+    automatically dropped at projection time -- the "ray-cast occlusion
+    culling" a naive image-space paste would need to implement
+    separately is already a property of pasting pre-projection, not
+    new logic added here.
 
     Returns the ORIGINAL sweep/labels unchanged if `clusters` is empty
     -- "nothing to paste" is a valid, expected state (e.g. before
@@ -145,7 +165,7 @@ def paste_rare_cluster(
         return sweep, original_labels
 
     cluster = clusters.clusters[rng.integers(0, len(clusters.clusters))]
-    placement_range = rng.uniform(MIN_PLACEMENT_RANGE_M, MAX_PLACEMENT_RANGE_M)
+    placement_range = rng.uniform(min_range_m, max_range_m)
     azimuth = rng.uniform(0.0, 2.0 * np.pi)
     target_x = placement_range * np.cos(azimuth)
     target_y = placement_range * np.sin(azimuth)

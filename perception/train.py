@@ -42,6 +42,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 from perception.cutmix import RareClusterSet, load_clusters, paste_rare_cluster
+from perception.frame_cache import FrameCache, apply_radial_jitter_to_raw
 from perception.ground_prior import compute_ground_prior
 from perception.input_tensor import (
     N_CHANNELS,
@@ -49,6 +50,7 @@ from perception.input_tensor import (
     assemble_input_tensor,
     compute_channel_stats,
     load_stats,
+    normalize_raw_channels,
     save_stats,
     _raw_channels,
     ground_prior_channel_from_points,
@@ -115,6 +117,8 @@ def _load_frame_with_cutmix(
     clusters: "RareClusterSet",
     target_class: int,
     rng: np.random.Generator,
+    min_range_m: float = 3.0,
+    max_range_m: float = 15.0,
 ):
     """Same as `_load_frame`, but pastes a real harvested rare-class
     cluster (`perception.cutmix.paste_rare_cluster`) into the raw sweep
@@ -122,12 +126,19 @@ def _load_frame_with_cutmix(
     occlusion-aware `project_to_range_image` z-buffering as every real
     point -- see `perception/cutmix.py`'s own module docstring for why
     this must happen pre-projection, not as an image-space patch paste.
+
+    `min_range_m`/`max_range_m` default to class-4 CutMix's original
+    3-15m band (byte-identical call for existing callers); the VEHICLE
+    copy-paste path below passes VEHICLE_COPYPASTE_MIN/MAX_RANGE_M
+    instead.
     """
     sweep = load_rellis_sweep(sequence_dir, frame_idx)
     raw_labels = load_rellis_labels(sequence_dir, frame_idx)
     drishti_labels = rellis_label_ids_to_drishti(raw_labels)
 
-    sweep, drishti_labels = paste_rare_cluster(sweep, drishti_labels, clusters, target_class, rng)
+    sweep, drishti_labels = paste_rare_cluster(
+        sweep, drishti_labels, clusters, target_class, rng, min_range_m=min_range_m, max_range_m=max_range_m
+    )
 
     img = project_to_range_image(sweep, sm)
     ground = compute_ground_prior(sweep, n_azimuth_bins=img.W)
@@ -163,6 +174,19 @@ BEAM_DROPOUT_STRIDES = (2, 3, 4)  # ~32, ~21, ~16 effective beams from 64
 
 AUG_CUTMIX_PROB = 0.3  # see perception/cutmix.py; targets class 4's confirmed 0.051% prevalence
 CUTMIX_TARGET_CLASS = 4  # DrishtiClass.STATIC_OBSTACLE
+
+# VEHICLE copy-paste augmentation (DRISHTI_MASTER_BIBLE.md Part G.19):
+# built specifically to counter Part G.17's real finding that VEHICLE
+# recall collapses to 2.75%-10.73% in [10,30)m -- the SAME
+# paste_rare_cluster mechanism as class-4 CutMix above, but with the
+# placement range overridden to [10, 30)m directly (not the class-4
+# default 3-15m) so the augmented examples land exactly in the failing
+# band, and a separate, independent probability so both augmentations
+# can be enabled together without one crowding out the other.
+AUG_VEHICLE_COPYPASTE_PROB = 0.3
+VEHICLE_TARGET_CLASS = 6  # DrishtiClass.VEHICLE
+VEHICLE_COPYPASTE_MIN_RANGE_M = 10.0
+VEHICLE_COPYPASTE_MAX_RANGE_M = 30.0
 
 
 def _apply_radial_jitter(img, rng: random.Random):
@@ -238,12 +262,28 @@ class RellisSegDataset(Dataset):
         stats: ChannelStats,
         is_train: bool = False,
         cutmix_clusters: Optional[RareClusterSet] = None,
+        vehicle_clusters: Optional[RareClusterSet] = None,
+        cache: Optional[FrameCache] = None,
     ):
         self.items = list(items)
         self.sm = sm
         self.stats = stats
         self.is_train = is_train
         self.cutmix_clusters = cutmix_clusters
+        self.vehicle_clusters = vehicle_clusters
+        # See perception/frame_cache.py's own docstring: caches the RAW
+        # (pre-normalisation) 13-channel stack + target + valid_mask,
+        # keyed by frame identity, computed BEFORE jitter (jitter is
+        # applied post-cache-read below, exactly like
+        # perception/nuscenes_seg_dataset.py's existing cache-aware
+        # branch). Only usable for frames that get NEITHER CutMix NOR
+        # the VEHICLE copy-paste augmentation below -- both mutate the
+        # RAW SWEEP with a different random cluster/placement on every
+        # call, so their output is not a stable function of frame
+        # identity and cannot be cached; this is a real, stated
+        # limitation of caching this particular dataset, not an
+        # oversight (see the class docstring's own note above this).
+        self.cache = cache
         self._rng = random.Random()
         self._np_rng = np.random.default_rng()
 
@@ -259,20 +299,64 @@ class RellisSegDataset(Dataset):
             and self.cutmix_clusters.clusters
             and self._rng.random() < AUG_CUTMIX_PROB
         )
+        # Independent roll -- can fire on the SAME frame as class-4
+        # CutMix above (both paste into the raw sweep pre-projection,
+        # so they compose safely) or on its own. Checked as an elif-
+        # style priority (vehicle paste only tried when class-4 CutMix
+        # didn't already fire this frame) purely to keep one frame from
+        # getting two separate synthetic pastes at once, which would
+        # make it harder to attribute effect to either augmentation.
+        use_vehicle_copypaste = (
+            not use_cutmix
+            and self.is_train
+            and self.vehicle_clusters is not None
+            and self.vehicle_clusters.clusters
+            and self._rng.random() < AUG_VEHICLE_COPYPASTE_PROB
+        )
         if use_cutmix:
             img, ground, target = _load_frame_with_cutmix(
                 sequence_dir, frame_idx, self.sm, self.cutmix_clusters, CUTMIX_TARGET_CLASS, self._np_rng
             )
+            tensor_np = assemble_input_tensor(img, ground, self.stats)
+            tensor = torch.from_numpy(tensor_np).float()
+            target_t = torch.from_numpy(target).long()
+            valid_t = torch.from_numpy(img.valid_mask).bool()
+        elif use_vehicle_copypaste:
+            img, ground, target = _load_frame_with_cutmix(
+                sequence_dir, frame_idx, self.sm, self.vehicle_clusters, VEHICLE_TARGET_CLASS, self._np_rng,
+                min_range_m=VEHICLE_COPYPASTE_MIN_RANGE_M, max_range_m=VEHICLE_COPYPASTE_MAX_RANGE_M,
+            )
+            tensor_np = assemble_input_tensor(img, ground, self.stats)
+            tensor = torch.from_numpy(tensor_np).float()
+            target_t = torch.from_numpy(target).long()
+            valid_t = torch.from_numpy(img.valid_mask).bool()
+        elif self.cache is not None:
+            # Cacheable path: no per-call randomness in the raw geometry
+            # itself (only jitter, applied AFTER the cached raw stack is
+            # read -- see this class's own __init__ docstring on why).
+            cache_key = f"{sequence_dir.name}_{frame_idx}"
+
+            def _compute():
+                img_c, ground_c, target_c = _load_frame(sequence_dir, frame_idx, self.sm)
+                raw = _raw_channels(img_c, ground_prior_channel_from_points(img_c, ground_c))
+                return {"raw": raw, "target": target_c, "valid_mask": img_c.valid_mask}
+
+            cached = self.cache.get_or_compute(cache_key, _compute)
+            raw, target, valid_mask_np = cached["raw"], cached["target"], cached["valid_mask"]
+            if self.is_train and self._rng.random() < AUG_JITTER_PROB:
+                raw = apply_radial_jitter_to_raw(raw, self._rng.uniform(*AUG_JITTER_RANGE))
+            tensor_np = normalize_raw_channels(raw, self.stats)
+            tensor = torch.from_numpy(tensor_np).float()
+            target_t = torch.from_numpy(target).long()
+            valid_t = torch.from_numpy(valid_mask_np).bool()
         else:
             img, ground, target = _load_frame(sequence_dir, frame_idx, self.sm)
-
-        if self.is_train and self._rng.random() < AUG_JITTER_PROB:
-            img = _apply_radial_jitter(img, self._rng)
-
-        tensor_np = assemble_input_tensor(img, ground, self.stats)
-        tensor = torch.from_numpy(tensor_np).float()
-        target_t = torch.from_numpy(target).long()
-        valid_t = torch.from_numpy(img.valid_mask).bool()
+            if self.is_train and self._rng.random() < AUG_JITTER_PROB:
+                img = _apply_radial_jitter(img, self._rng)
+            tensor_np = assemble_input_tensor(img, ground, self.stats)
+            tensor = torch.from_numpy(tensor_np).float()
+            target_t = torch.from_numpy(target).long()
+            valid_t = torch.from_numpy(img.valid_mask).bool()
 
         if self.is_train:
             tensor, target_t, valid_t = _apply_spatial_augmentation(tensor, target_t, valid_t, self._rng)
@@ -384,6 +468,12 @@ def train(
     use_class_weights: bool = True,
     focal_gamma: Optional[float] = None,
     cutmix_clusters_path: Optional[str] = None,
+    vehicle_copypaste_clusters_path: Optional[str] = None,
+    use_ccal: bool = False,
+    ccal_kappa: float = 5.0,
+    ccal_weight: float = 0.3,
+    confusion_ema_decay: float = 0.98,
+    cache_dir: Optional[str] = None,
 ) -> None:
     """`init_from_checkpoint`: load ONLY model weights from a prior
     run's checkpoint (e.g. `checkpoints_multi/checkpoint_epoch19.pt`)
@@ -452,8 +542,27 @@ def train(
         cutmix_clusters = load_clusters(cutmix_clusters_path)
         print(f"Loaded {len(cutmix_clusters.clusters)} CutMix clusters from {cutmix_clusters_path}")
 
-    train_ds = RellisSegDataset(train_items, sm, stats, is_train=True, cutmix_clusters=cutmix_clusters)
-    val_ds = RellisSegDataset(val_items, sm, stats, is_train=False)
+    vehicle_clusters = None
+    if vehicle_copypaste_clusters_path:
+        vehicle_clusters = load_clusters(vehicle_copypaste_clusters_path)
+        print(f"Loaded {len(vehicle_clusters.clusters)} VEHICLE copy-paste clusters from "
+              f"{vehicle_copypaste_clusters_path} (placement band [{VEHICLE_COPYPASTE_MIN_RANGE_M},"
+              f"{VEHICLE_COPYPASTE_MAX_RANGE_M})m -- Part G.19)")
+
+    frame_cache = None
+    if cache_dir:
+        frame_cache = FrameCache(cache_dir)
+        print(f"FrameCache enabled at {cache_dir} -- only benefits frames that get neither CutMix nor "
+              f"the VEHICLE copy-paste augmentation this run (~49% of train frames, by the configured "
+              f"probabilities) plus every validation frame (never augmented); epoch 0 pays full compute "
+              f"+ write cost, epoch 1+ is a fast read for those frames (Part G.11/G.18's own measured "
+              f"break-even point).")
+
+    train_ds = RellisSegDataset(
+        train_items, sm, stats, is_train=True, cutmix_clusters=cutmix_clusters, vehicle_clusters=vehicle_clusters,
+        cache=frame_cache,
+    )
+    val_ds = RellisSegDataset(val_items, sm, stats, is_train=False, cache=frame_cache)
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
     val_loader = DataLoader(val_ds, batch_size=1, shuffle=False, num_workers=num_workers)
 
@@ -509,7 +618,18 @@ def train(
         print("Class weights (secondary CE term only, mean-normalised inverse-sqrt-frequency):")
         for c, w in enumerate(class_weight.tolist()):
             print(f"  class {c}: {w:.3f}")
-    loss_fn = DrishtiSegLoss(class_weight=class_weight, focal_gamma=focal_gamma).to(device)
+    loss_fn = DrishtiSegLoss(
+        class_weight=class_weight,
+        focal_gamma=focal_gamma,
+        use_confusion_aware=use_ccal,
+        n_classes=N_CLASSES_DEFAULT if use_ccal else None,
+        confusion_ema_decay=confusion_ema_decay,
+        confusion_kappa=ccal_kappa,
+        ccal_weight=ccal_weight,
+    ).to(device)
+    if use_ccal:
+        print(f"CCAL enabled: kappa={ccal_kappa}, ema_decay={confusion_ema_decay}, ccal_weight={ccal_weight} "
+              f"(Part G.19 -- targets the real 81.80% VEHICLE-as-VEGETATION confusion from Part G.17)")
 
     start_epoch = load_checkpoint_if_exists(ckpt_path, model, optimizer, scheduler, scaler, device)
     if start_epoch > 0:
@@ -542,6 +662,11 @@ def train(
             scaler.step(optimizer)
             scaler.update()
             scheduler.step()
+            # CCAL's confusion_ema is updated from THIS step's own
+            # main_logits/target/valid, AFTER the optimizer step -- a
+            # no-op when use_ccal=False (update_confusion_ema returns
+            # immediately if confusion_ema is None, see perception/losses.py).
+            loss_fn.update_confusion_ema(main_logits.detach(), target, valid)
             running_loss += loss.item()
             n_batches += 1
 
@@ -674,6 +799,30 @@ if __name__ == "__main__":
         help="Path to a .npz produced by eval/extract_rare_clusters.py -- enables CutMix pasting of "
              "real class-4 (STATIC_OBSTACLE) point clusters into training frames. Off by default.",
     )
+    parser.add_argument(
+        "--vehicle-copypaste-clusters",
+        default=None,
+        help="Path to a .npz produced by 'python -m eval.extract_rare_clusters --target-class 6' -- "
+             "enables the VEHICLE copy-paste augmentation (Part G.19), pasting real VEHICLE point "
+             "clusters into the [10,30)m band specifically (VEHICLE_COPYPASTE_MIN/MAX_RANGE_M) to "
+             "counter Part G.17's real recall collapse there. Off by default.",
+    )
+    parser.add_argument(
+        "--use-ccal",
+        action="store_true",
+        help="Enable the Composite Confusion-Aware Loss term (perception.losses.confusion_aware_penalty, "
+             "Part G.19) -- tracks an EMA confusion matrix during training and up-weights CE specifically "
+             "for a pixel's own (true_class, currently-predicted_class) pair. Off by default.",
+    )
+    parser.add_argument("--ccal-kappa", type=float, default=5.0, help="CCAL penalty strength multiplier.")
+    parser.add_argument("--ccal-weight", type=float, default=0.3, help="Weight of the CCAL term in the total loss.")
+    parser.add_argument("--confusion-ema-decay", type=float, default=0.98, help="EMA decay for CCAL's confusion matrix.")
+    parser.add_argument(
+        "--cache-dir",
+        default=None,
+        help="Enable perception.frame_cache.FrameCache for the non-augmented (no CutMix, no VEHICLE "
+             "copy-paste) frame path and all validation frames. Off by default.",
+    )
     args = parser.parse_args()
 
     train(
@@ -684,6 +833,12 @@ if __name__ == "__main__":
         use_class_weights=not args.no_class_weights,
         focal_gamma=args.focal_gamma,
         cutmix_clusters_path=args.cutmix_clusters,
+        vehicle_copypaste_clusters_path=args.vehicle_copypaste_clusters,
+        use_ccal=args.use_ccal,
+        ccal_kappa=args.ccal_kappa,
+        ccal_weight=args.ccal_weight,
+        confusion_ema_decay=args.confusion_ema_decay,
+        cache_dir=args.cache_dir,
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,

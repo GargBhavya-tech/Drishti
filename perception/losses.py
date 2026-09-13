@@ -174,6 +174,51 @@ def focal_loss(
     return ((1.0 - pt) ** gamma * ce).mean()
 
 
+def confusion_aware_penalty(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    valid_mask: torch.Tensor,
+    confusion_ema: torch.Tensor,
+    kappa: float = 5.0,
+) -> torch.Tensor:
+    """Composite Confusion-Aware Loss (CCAL) term -- built in direct
+    response to DRISHTI_MASTER_BIBLE.md Part G.17's real finding that
+    81.80% of RELLIS-3D VEHICLE misclassifications land specifically on
+    VEGETATION (not a diffuse spread across classes). Standard class-
+    weighted CE (`compute_class_weights` / `class_weight` above) scales
+    a class's OVERALL gradient magnitude uniformly regardless of WHICH
+    wrong class it lands on -- it cannot express "VEHICLE-as-VEGETATION
+    specifically is the failure mode, not VEHICLE-as-anything". This
+    term reads the row-normalised EMA confusion matrix
+    (`DrishtiSegLoss.confusion_ema`, updated by `update_confusion_ema`)
+    and up-weights a pixel's CE contribution in proportion to how often
+    ITS SPECIFIC (true_class, current_predicted_class) pair has
+    historically been confused, so the two most-conflated classes are
+    pushed apart directly rather than via a global reweighting.
+
+    Only pixels the model currently predicts WRONG get the extra
+    weight (`mismatch` mask) -- an already-correct prediction must not
+    be penalised extra just because its true class has a high-confusion
+    row elsewhere; that would inflate gradient on pixels that need none.
+
+    `confusion_ema` is read here, never written -- `update_confusion_ema`
+    is the only mutator, called separately (with its own no_grad scope)
+    so this penalty's own backward pass never tries to differentiate
+    through the confusion matrix itself (it is a fixed per-step lookup
+    table by design, exactly like a class_weight buffer).
+    """
+    logits_v, targets_v, _ = _flatten_valid(logits, targets, valid_mask)
+    if logits_v.shape[0] == 0:
+        return logits.sum() * 0.0
+    with torch.no_grad():
+        pred_v = logits_v.argmax(dim=1)
+        row = confusion_ema[targets_v, pred_v]
+        mismatch = (pred_v != targets_v).float()
+        weight = 1.0 + kappa * row * mismatch
+    ce = F.cross_entropy(logits_v, targets_v, reduction="none")
+    return (weight * ce).mean()
+
+
 class DrishtiSegLoss(nn.Module):
     """Bible Part 5.4's full stack: Lovász (primary) + confidence-
     weighted CE (secondary) + Lovász on the aux head at its own
@@ -189,6 +234,11 @@ class DrishtiSegLoss(nn.Module):
         class_weight: Optional[torch.Tensor] = None,
         focal_gamma: Optional[float] = None,
         focal_weight: float = 0.5,
+        use_confusion_aware: bool = False,
+        n_classes: Optional[int] = None,
+        confusion_ema_decay: float = 0.98,
+        confusion_kappa: float = 5.0,
+        ccal_weight: float = 0.3,
     ):
         super().__init__()
         self.ce_weight = ce_weight
@@ -203,6 +253,55 @@ class DrishtiSegLoss(nn.Module):
         # the wrong device would raise at the first forward() call
         # under AMP/CUDA rather than silently doing nothing.
         self.register_buffer("class_weight", class_weight, persistent=False)
+
+        # CCAL (see confusion_aware_penalty's own docstring) -- OFF by
+        # default (use_confusion_aware=False), byte-identical to
+        # pre-CCAL behaviour for every existing caller that doesn't
+        # pass it. `n_classes` is required only when enabling it (to
+        # size the confusion_ema buffer); left None otherwise so
+        # existing call sites are unaffected.
+        self.use_confusion_aware = use_confusion_aware
+        self.confusion_ema_decay = confusion_ema_decay
+        self.confusion_kappa = confusion_kappa
+        self.ccal_weight = ccal_weight
+        if use_confusion_aware:
+            if n_classes is None:
+                raise ValueError("n_classes is required when use_confusion_aware=True")
+            # Starts at all-zeros: weight = 1 + kappa*0*mismatch = 1 for
+            # every pixel until real confusion data accrues via
+            # update_confusion_ema -- i.e. CCAL is a real no-op for the
+            # first steps of training, not an arbitrary cold-start bias.
+            self.register_buffer("confusion_ema", torch.zeros(n_classes, n_classes), persistent=False)
+        else:
+            self.confusion_ema = None
+
+    def update_confusion_ema(self, logits: torch.Tensor, targets: torch.Tensor, valid_mask: torch.Tensor) -> None:
+        """Updates `self.confusion_ema` in place from one batch's real
+        predictions. Call ONCE per training step, AFTER the forward
+        pass that computed `logits` (the confusion measured must
+        reflect the model's CURRENT weights, not a stale batch) and
+        BEFORE the next step's `forward()` reads it. No-op if CCAL is
+        disabled (self.confusion_ema is None) -- callers can call this
+        unconditionally without checking `use_confusion_aware` first."""
+        if self.confusion_ema is None:
+            return
+        with torch.no_grad():
+            logits_v, targets_v, _ = _flatten_valid(logits, targets, valid_mask)
+            if logits_v.shape[0] == 0:
+                return
+            pred_v = logits_v.argmax(dim=1)
+            n = self.confusion_ema.shape[0]
+            idx = targets_v * n + pred_v
+            batch_cm = torch.bincount(idx, minlength=n * n).reshape(n, n).float()
+            row_sums = batch_cm.sum(dim=1, keepdim=True)
+            has_data = row_sums.squeeze(1) > 0
+            if not torch.any(has_data):
+                return
+            batch_cm_norm = batch_cm / row_sums.clamp_min(1.0)
+            decay = self.confusion_ema_decay
+            self.confusion_ema[has_data] = (
+                decay * self.confusion_ema[has_data] + (1.0 - decay) * batch_cm_norm[has_data]
+            )
 
     def forward(
         self,
@@ -219,6 +318,10 @@ class DrishtiSegLoss(nn.Module):
         if self.focal_gamma is not None:
             focal = focal_loss(logits, targets, valid_mask, gamma=self.focal_gamma, class_weight=self.class_weight)
             total = total + self.focal_weight * focal
+
+        if self.confusion_ema is not None:
+            ccal = confusion_aware_penalty(logits, targets, valid_mask, self.confusion_ema, kappa=self.confusion_kappa)
+            total = total + self.ccal_weight * ccal
 
         if aux_logits is not None:
             H_aux, W_aux = aux_logits.shape[2:]
