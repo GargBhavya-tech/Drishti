@@ -203,3 +203,54 @@ def cost(cell: CellState, vehicle: VehicleConfig) -> float:
         base = base + (UNKNOWN_COST - base) * decay_factor
 
     return base
+
+
+def merge_with_prior(prior: CellState, fresh: CellState, dt_s: float, vehicle: VehicleConfig) -> CellState:
+    """Closes the real, discovered gap in DRISHTI_MASTER_BIBLE.md Part
+    G.14: `cost()` above is correctly, deliberately memoryless (Ticket
+    #42's own "one canonical decision surface" framing) -- it has no way
+    to know a `fresh` single-frame reclassification is REPLACING a
+    `prior` reading of a real, already-confirmed hazard. A caller that
+    feeds `cost()` a `fresh` CellState built from scratch every frame,
+    with no merge step, can watch a confirmed PEDESTRIAN (high cost)
+    reclassify to UNKNOWN or FREE (low cost) the instant a sensor
+    dropout or attenuation event removes its points -- a real,
+    reproduced violation of the Conservatism Invariant's own spirit,
+    even though `cost()` itself is provably correct given the state it's
+    handed (Part C.16's own property test still passes; the PRECONDITION
+    that test assumes was what was missing).
+
+    Policy, built from mechanisms this module ALREADY HAS rather than a
+    new one invented for this purpose (Principle 3: reuse what's
+    already built and tested):
+    - If `cost(fresh) >= cost(prior)`, the fresh reading is consistent
+      with or more cautious than memory -- trust it outright and return
+      it unchanged. A genuinely NEW, WORSE hazard must take effect
+      immediately, not be softened by this function.
+    - If `cost(fresh) < cost(prior)`, returning `fresh` directly would
+      violate the invariant. Instead, carry `prior` FORWARD, aged by
+      `dt_s` and flagged `provisional=True` -- reusing the EXISTING
+      age-based confidence-decay mechanism in `cost()` (Bible Part
+      12.3's own `stale_cell_confidence_decayed` row) rather than
+      inventing a second decay curve. `cost()`'s own age-decay term is
+      one-directional (documented above: "Only ever able to INCREASE
+      base ... so it cannot violate monotonicity either"), so aging the
+      carried-forward `prior` can only ever raise its cost toward
+      UNKNOWN_COST over repeated calls -- never lower it. This means a
+      real hazard that disappears from view for good eventually decays
+      to UNKNOWN_COST (the correct, cautious outcome for "we no longer
+      know"), while a hazard degraded for only one frame is correctly
+      held over rather than instantly reported as clear.
+
+    Guarantee this provides: for any single call,
+    `cost(merge_with_prior(prior, fresh, dt_s, vehicle), vehicle) >=
+    cost(prior, vehicle)` -- verified directly against real sensor
+    degradation in eval/validate_conservatism_real_degradation.py,
+    which is what originally found the gap this function closes.
+    """
+    from dataclasses import replace
+
+    if cost(fresh, vehicle) >= cost(prior, vehicle):
+        return fresh
+
+    return replace(prior, age_s=prior.age_s + dt_s, provisional=True)

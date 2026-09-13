@@ -28,6 +28,7 @@ from planning.conservatism import (
     UNKNOWN_COST,
     CellState,
     cost,
+    merge_with_prior,
 )
 from sensor.vehicle_config import load_vehicle_config
 
@@ -240,7 +241,7 @@ def _is_true_information_loss(cell: CellState, degraded: CellState) -> bool:
 
 
 @given(cell=cell_states(), degradation=degradations())
-@settings(max_examples=10_000)
+@settings(max_examples=10_000, deadline=None)  # real, observed flakiness on a loaded machine (332ms vs 200ms default deadline on one example, 19ms on rerun) -- a timing artifact, not a logic failure; Hypothesis's own suggested fix
 def test_cost_is_monotone_under_information_loss(cell, degradation):
     vehicle = load_vehicle_config(CONFIGS / "vehicle_ugv.yaml")
     degraded = degradation.apply(cell)
@@ -309,3 +310,69 @@ def test_a_deliberately_broken_cost_function_is_caught_by_the_property(vehicle):
     # Under the BROKEN version, it does -- exactly the violation the
     # property test exists to catch.
     assert broken_cost(degraded_to_unobserved, vehicle) < broken_cost(known_hazard, vehicle)
+
+
+# ---------------------------------------------------------------------------
+# merge_with_prior -- closes the real gap found in
+# eval/validate_conservatism_real_degradation.py (DRISHTI_MASTER_BIBLE.md
+# Part G.14): a FRESH single-frame reclassification, with no memory of a
+# prior reading, can report a lower cost than the prior state genuinely
+# had -- not because cost() is wrong (it isn't; it's correctly
+# memoryless), but because nothing enforced the precondition the
+# invariant assumes (the state handed to cost() is a true degradation of
+# memory, never an independent fresh read). This is the GENERAL property
+# proof; eval/validate_conservatism_real_degradation.py is the real-data
+# instance that found the gap this closes.
+# ---------------------------------------------------------------------------
+
+
+@given(prior=cell_states(), fresh=cell_states(), dt_s=st.floats(min_value=0.0, max_value=100.0, allow_nan=False))
+@settings(max_examples=10_000)
+def test_merge_with_prior_never_lowers_cost_below_prior(prior, fresh, dt_s):
+    """For ANY prior/fresh pair (not just the two real cases that found
+    this gap), merging must never let the reported cost drop below what
+    the PRIOR state already established -- the exact guarantee
+    merge_with_prior's own docstring states. Loads `vehicle` directly
+    (not via the pytest fixture) -- same reason
+    test_cost_is_monotone_under_information_loss above does: a
+    function-scoped fixture is not reset between @given's generated
+    inputs, which Hypothesis's own health check correctly flags."""
+    vehicle = load_vehicle_config(CONFIGS / "vehicle_ugv.yaml")
+    merged = merge_with_prior(prior, fresh, dt_s, vehicle)
+    assert cost(merged, vehicle) >= cost(prior, vehicle) - 1e-9
+
+
+def test_merge_with_prior_trusts_fresh_when_fresh_is_at_least_as_cautious():
+    """A genuinely NEW, WORSE (or equally cautious) hazard must take
+    effect immediately -- merge_with_prior must not soften real escalation."""
+    vehicle = load_vehicle_config(CONFIGS / "vehicle_ugv.yaml")
+    prior = CellState(observability=OBS_FREE, class_id=int(DrishtiClass.DRIVABLE), count=50)
+    fresh = CellState(observability=OBS_OCCUPIED, class_id=int(DrishtiClass.STATIC_OBSTACLE), count=10)
+
+    merged = merge_with_prior(prior, fresh, dt_s=0.1, vehicle=vehicle)
+    assert merged == fresh
+
+
+def test_merge_with_prior_reproduces_the_real_violation_found_and_then_fixes_it():
+    """The exact real scenario eval/validate_conservatism_real_degradation.py
+    found: a confirmed PEDESTRIAN cell, fully sensor-dropped, reclassifies
+    to FREE. Without merge_with_prior, cost() (correctly, given only the
+    fresh state) reports a lower cost -- WITH merge_with_prior, it does not."""
+    vehicle = load_vehicle_config(CONFIGS / "vehicle_ugv.yaml")
+    prior = CellState(
+        observability=OBS_OCCUPIED, class_id=int(DrishtiClass.PEDESTRIAN),
+        class_confidence=1.0, sparsity_verdict=SparsityVerdict.NORMAL, count=1040,
+    )
+    fresh_after_sector_dropout = CellState(
+        observability=OBS_FREE, class_id=None,
+        class_confidence=1.0, sparsity_verdict=SparsityVerdict.FREE, count=0,
+    )
+
+    # Confirms the real violation this test guards against is genuine,
+    # not a strawman -- feeding `fresh` directly to cost() DOES drop below prior.
+    assert cost(fresh_after_sector_dropout, vehicle) < cost(prior, vehicle)
+
+    # merge_with_prior closes it.
+    merged = merge_with_prior(prior, fresh_after_sector_dropout, dt_s=0.1, vehicle=vehicle)
+    assert cost(merged, vehicle) >= cost(prior, vehicle)
+    assert merged.provisional is True  # honestly flagged as inherited, not a live read
