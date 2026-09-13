@@ -474,6 +474,7 @@ def train(
     ccal_weight: float = 0.3,
     confusion_ema_decay: float = 0.98,
     cache_dir: Optional[str] = None,
+    cache_val_only: bool = False,
 ) -> None:
     """`init_from_checkpoint`: load ONLY model weights from a prior
     run's checkpoint (e.g. `checkpoints_multi/checkpoint_epoch19.pt`)
@@ -552,15 +553,25 @@ def train(
     frame_cache = None
     if cache_dir:
         frame_cache = FrameCache(cache_dir)
-        print(f"FrameCache enabled at {cache_dir} -- only benefits frames that get neither CutMix nor "
-              f"the VEHICLE copy-paste augmentation this run (~49% of train frames, by the configured "
-              f"probabilities) plus every validation frame (never augmented); epoch 0 pays full compute "
-              f"+ write cost, epoch 1+ is a fast read for those frames (Part G.11/G.18's own measured "
-              f"break-even point).")
+        if cache_val_only:
+            print(f"FrameCache enabled at {cache_dir} for VALIDATION ONLY (--cache-val-only) -- "
+                  f"~2,034 RELLIS val frames at FrameCache's real measured ~3.82MB/frame compressed "
+                  f"size is ~7.8GB, well inside typical shared-server disk headroom, unlike caching "
+                  f"train+val together (train's ~49% cacheable share alone pushes the real total past "
+                  f"what a constrained disk can safely hold -- see DRISHTI_MASTER_BIBLE.md Part G.19's "
+                  f"disk-constraint note). Train frames are recomputed fresh every epoch, unaffected.")
+        else:
+            print(f"FrameCache enabled at {cache_dir} for train+val -- only benefits frames that get "
+                  f"neither CutMix nor the VEHICLE copy-paste augmentation this run (~49% of train "
+                  f"frames, by the configured probabilities) plus every validation frame (never "
+                  f"augmented); epoch 0 pays full compute + write cost, epoch 1+ is a fast read for "
+                  f"those frames (Part G.11/G.18's own measured break-even point). Verify real free "
+                  f"disk space first -- FrameCache's own budget check is real but the total footprint "
+                  f"for a full RELLIS run is substantial (see Part G.19).")
 
     train_ds = RellisSegDataset(
         train_items, sm, stats, is_train=True, cutmix_clusters=cutmix_clusters, vehicle_clusters=vehicle_clusters,
-        cache=frame_cache,
+        cache=(None if cache_val_only else frame_cache),
     )
     val_ds = RellisSegDataset(val_items, sm, stats, is_train=False, cache=frame_cache)
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=num_workers, drop_last=True)
@@ -823,6 +834,14 @@ if __name__ == "__main__":
         help="Enable perception.frame_cache.FrameCache for the non-augmented (no CutMix, no VEHICLE "
              "copy-paste) frame path and all validation frames. Off by default.",
     )
+    parser.add_argument(
+        "--cache-val-only",
+        action="store_true",
+        help="With --cache-dir set, cache ONLY validation frames (not train) -- real measured disk "
+             "footprint ~7.8GB for RELLIS's 2,034 val frames (see Part G.19), fits comfortably where "
+             "caching train+val together would not on a disk-constrained shared server. No effect "
+             "without --cache-dir.",
+    )
     args = parser.parse_args()
 
     train(
@@ -839,6 +858,7 @@ if __name__ == "__main__":
         ccal_weight=args.ccal_weight,
         confusion_ema_decay=args.confusion_ema_decay,
         cache_dir=args.cache_dir,
+        cache_val_only=args.cache_val_only,
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,

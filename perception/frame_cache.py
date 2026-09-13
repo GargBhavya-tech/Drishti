@@ -94,18 +94,6 @@ class FrameCache:
                 pass
 
         result = compute_fn()
-        new_bytes = sum(arr.nbytes for arr in result.values())
-        if self._written_bytes + new_bytes > self._free_at_start * self.max_disk_fraction:
-            raise RuntimeError(
-                f"FrameCache at {self.cache_dir}: writing this frame would bring this run's "
-                f"cache writes to {(self._written_bytes + new_bytes) / 1e9:.2f}GB, exceeding "
-                f"{self.max_disk_fraction:.0%} of the {self._free_at_start / 1e9:.2f}GB that was "
-                f"free when this cache started. Refusing to write further -- free disk space, "
-                f"raise --max-disk-fraction if you have verified real headroom, or disable caching "
-                f"for this dataset. This check exists because this project runs on a SHARED server "
-                f"(see this module's own docstring) -- silently filling the disk is worse than a "
-                f"training run failing loudly here."
-            )
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         # Write to a per-process temp file, then atomic rename -- with
         # num_workers > 0, two DataLoader worker processes can race to
@@ -118,8 +106,32 @@ class FrameCache:
         # small cost, corruption would be a much worse one.
         tmp_path = cache_path.with_suffix(f".tmp{os.getpid()}.npz")
         np.savez_compressed(tmp_path, **result)
+
+        # Budget check uses the REAL on-disk (compressed) file size, not
+        # sum(arr.nbytes) -- measured for this project's own 13-channel
+        # RELLIS raw stack at ~3.82MB/frame actual compressed size versus
+        # ~14.8MB/frame of raw nbytes (this data compresses ~3.9x), so an
+        # nbytes-based budget was refusing writes at roughly 1/4 of what
+        # the disk could actually hold. Written AFTER compression (the
+        # true number), checked BEFORE the atomic rename -- an over-
+        # budget frame's temp file is deleted, never committed to
+        # `cache_path`, so a refusal here leaves no partial cache entry
+        # behind for the next run to trip over.
+        actual_bytes = tmp_path.stat().st_size
+        if self._written_bytes + actual_bytes > self._free_at_start * self.max_disk_fraction:
+            tmp_path.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"FrameCache at {self.cache_dir}: writing this frame would bring this run's "
+                f"cache writes to {(self._written_bytes + actual_bytes) / 1e9:.2f}GB (real on-disk "
+                f"size), exceeding {self.max_disk_fraction:.0%} of the {self._free_at_start / 1e9:.2f}GB "
+                f"that was free when this cache started. Refusing to write further -- free disk space, "
+                f"raise --max-disk-fraction if you have verified real headroom, or disable caching "
+                f"for this dataset. This check exists because this project runs on a SHARED server "
+                f"(see this module's own docstring) -- silently filling the disk is worse than a "
+                f"training run failing loudly here."
+            )
         os.replace(tmp_path, cache_path)
-        self._written_bytes += new_bytes
+        self._written_bytes += actual_bytes
         return result
 
     @property

@@ -131,10 +131,27 @@ RELLIS_TO_DRISHTI: Dict[str, DrishtiClass] = {
     "building": DrishtiClass.STATIC_OBSTACLE,
     "log": DrishtiClass.STATIC_OBSTACLE,
     "person": DrishtiClass.PEDESTRIAN,
-    "fence": DrishtiClass.NON_TRAVERSABLE,
+    # fence/barrier moved from NON_TRAVERSABLE to STATIC_OBSTACLE
+    # (DRISHTI_MASTER_BIBLE.md Part G.24) -- real point-count check
+    # against all 5 local sequences found fence=0.098% and barrier=0.268%
+    # of all points, versus STATIC_OBSTACLE's OWN existing members
+    # (pole+object+building+log) totalling only 0.054% combined -- i.e.
+    # fence+barrier together are ~8x the real prevalence of everything
+    # already in STATIC_OBSTACLE, and physically they are the same kind
+    # of thing the PS names as the class's own canonical example ("walls,
+    # poles, and fixed vertical structures") that this project's five
+    # prior STATIC_OBSTACLE attempts all failed to learn from ~0.06%
+    # scarcity. Confirmed BEFORE this change that it is planning-safety-
+    # neutral: `planning/conservatism.py` already maps BOTH
+    # NON_TRAVERSABLE and STATIC_OBSTACLE to the identical
+    # _KNOWN_HAZARD_COST -- moving fence/barrier between them changes
+    # which bucket the SEGMENTATION NETWORK must learn, not how the
+    # PLANNER treats a real fence/barrier point once classified, in
+    # either bucket.
+    "fence": DrishtiClass.STATIC_OBSTACLE,
     "bush": DrishtiClass.VEGETATION,
     "concrete": DrishtiClass.DRIVABLE,
-    "barrier": DrishtiClass.NON_TRAVERSABLE,
+    "barrier": DrishtiClass.STATIC_OBSTACLE,
     "puddle": DrishtiClass.CAUTION,           # flat but possibly shallow -- caution, not lethal
     "mud": DrishtiClass.CAUTION,
     "rubble": DrishtiClass.NON_TRAVERSABLE,

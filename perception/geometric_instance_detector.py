@@ -121,6 +121,7 @@ class GeometricDetection:
     n_expected_points: float
     kappa: float  # n_points / n_expected_points -- physics-grounded confidence, see module docstring
     possible_multi_instance: bool
+    member_xyz: np.ndarray  # (n_points, 3) -- the cluster's own real points, in the SAME frame as the `xyz` this call was given (sensor-local, not world). Added for Part G.23's temporal-persistence filter, which needs real member points (not just aggregate stats) to accumulate occupied/free evidence per candidate; every prior field here is unaffected -- existing callers that never read this new field see no change.
 
 
 def _class_mode(class_ids: np.ndarray) -> int:
@@ -287,6 +288,7 @@ def detect_instances(
                     n_expected_points=n_exp,
                     kappa=kappa,
                     possible_multi_instance=possible_multi_instance,
+                    member_xyz=sub_xyz,
                 )
             )
 
