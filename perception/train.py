@@ -475,6 +475,11 @@ def train(
     confusion_ema_decay: float = 0.98,
     cache_dir: Optional[str] = None,
     cache_val_only: bool = False,
+    scheduler_type: str = "onecycle",
+    warm_restart_t0_epochs: int = 10,
+    warm_restart_t_mult: int = 2,
+    swa_epochs: int = 0,
+    swa_lr: float = 1e-5,
 ) -> None:
     """`init_from_checkpoint`: load ONLY model weights from a prior
     run's checkpoint (e.g. `checkpoints_multi/checkpoint_epoch19.pt`)
@@ -611,9 +616,43 @@ def train(
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
     steps_per_epoch = max(1, len(train_loader))
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer, max_lr=lr, epochs=epochs, steps_per_epoch=steps_per_epoch
-    )
+    if scheduler_type == "onecycle":
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer, max_lr=lr, epochs=epochs, steps_per_epoch=steps_per_epoch
+        )
+    elif scheduler_type == "warm_restarts":
+        # A deep-research report reviewed this session (Bible Part G.30)
+        # recommended this as a real, standard technique to break a
+        # late-stage plateau: OneCycleLR's monotonic decay forces the
+        # model into the nearest local minimum as LR approaches ~0;
+        # CosineAnnealingWarmRestarts periodically snaps LR back to its
+        # peak (T_0 epochs, then T_0*T_mult, then T_0*T_mult^2, ...),
+        # deliberately re-perturbing the weights out of a sharp/suboptimal
+        # basin before a longer decay explores a potentially flatter one.
+        # T_0/T_mult are given in EPOCHS but this scheduler is stepped
+        # PER BATCH below (matching OneCycleLR's existing call site,
+        # unchanged) -- so T_0 is scaled to batch-steps here, once.
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer, T_0=max(1, warm_restart_t0_epochs * steps_per_epoch), T_mult=warm_restart_t_mult
+        )
+    else:
+        raise ValueError(f"Unknown scheduler_type: {scheduler_type!r} (expected 'onecycle' or 'warm_restarts')")
+
+    swa_model = None
+    swa_scheduler = None
+    swa_start_epoch = epochs - swa_epochs if swa_epochs > 0 else None
+    if swa_epochs > 0:
+        # Stochastic Weight Averaging (Bible Part G.30): for the FINAL
+        # swa_epochs epochs, average the model's weights across epochs
+        # instead of taking the last epoch's own (possibly sharp-minimum)
+        # weights. torch.optim.swa_utils.AveragedModel maintains a running
+        # equal-weight average of every update_parameters() call; SWALR
+        # anneals to and then holds a constant, low LR during this phase
+        # (deliberately NOT the main per-batch scheduler above -- SWA's
+        # own theory assumes a near-constant LR during averaging, not a
+        # still-decaying/still-restarting one).
+        swa_model = torch.optim.swa_utils.AveragedModel(model)
+        swa_scheduler = torch.optim.swa_utils.SWALR(optimizer, swa_lr=swa_lr)
     # torch.amp.GradScaler (device-agnostic) doesn't exist before torch
     # ~2.3; torch.cuda.amp.GradScaler is deprecated in newer torch but is
     # what the actual training machine (torch 2.0.1) has. Try new, fall
@@ -659,6 +698,7 @@ def train(
     OVERFIT_WINDOW = 3  # consecutive epochs of val-loss-up + train-loss-down before flagging
 
     for epoch in range(start_epoch, epochs):
+        in_swa_phase = swa_start_epoch is not None and epoch >= swa_start_epoch
         model.train()
         t0 = time.time()
         running_loss = 0.0
@@ -672,7 +712,12 @@ def train(
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
-            scheduler.step()
+            if not in_swa_phase:
+                # During the SWA phase, LR is governed by swa_scheduler
+                # (stepped once per epoch, below) -- NOT this per-batch
+                # scheduler, which would otherwise keep restarting/decaying
+                # against SWA's own constant-LR assumption.
+                scheduler.step()
             # CCAL's confusion_ema is updated from THIS step's own
             # main_logits/target/valid, AFTER the optimizer step -- a
             # no-op when use_ccal=False (update_confusion_ema returns
@@ -680,6 +725,10 @@ def train(
             loss_fn.update_confusion_ema(main_logits.detach(), target, valid)
             running_loss += loss.item()
             n_batches += 1
+
+        if in_swa_phase:
+            swa_model.update_parameters(model)
+            swa_scheduler.step()
 
         avg_loss = running_loss / max(1, n_batches)
         elapsed = time.time() - t0
@@ -712,7 +761,7 @@ def train(
         val_loss_avg = val_running_loss / max(1, val_n_batches)
         ious = per_class_iou(cm)
         miou = float(np.nanmean(ious))
-        current_lr = scheduler.get_last_lr()[0]
+        current_lr = swa_scheduler.get_last_lr()[0] if in_swa_phase else scheduler.get_last_lr()[0]
         print(f"Epoch {epoch}: val loss={val_loss_avg:.4f} val mIoU={miou:.4f} lr={current_lr:.2e}")
         for c, iou in enumerate(ious):
             print(f"  class {c} IoU: {iou if not np.isnan(iou) else 'n/a (no pixels)'}")
@@ -752,6 +801,7 @@ def train(
                 "best_epoch_so_far": best_epoch,
                 "best_miou_so_far": best_miou,
                 "overfitting_flag": overfitting,
+                "swa_phase": in_swa_phase,
             }) + "\n")
 
         with open(out_dir / f"val_metrics_epoch{epoch}.json", "w") as f:
@@ -772,6 +822,43 @@ def train(
                 f,
                 indent=2,
             )
+
+    if swa_model is not None:
+        # BatchNorm's running mean/var were accumulated against the
+        # PER-EPOCH weights during training, not the AVERAGED weights SWA
+        # just produced -- they do not transfer. torch.optim.swa_utils.
+        # update_bn re-estimates them correctly by running the averaged
+        # model in train() mode (BN-update-only, no backward pass) over
+        # the real training set once. `train_loader` yields (x, target,
+        # valid) tuples; update_bn takes input[0] automatically.
+        print("SWA phase complete -- recomputing BatchNorm statistics for the averaged weights...")
+        torch.optim.swa_utils.update_bn(train_loader, swa_model, device=device)
+
+        # Real evaluation of the SWA model, not an assumed improvement --
+        # same val loop/metrics as every other epoch, reported honestly
+        # even if it turns out worse than best.pt.
+        swa_cm = np.zeros((N_CLASSES_DEFAULT, N_CLASSES_DEFAULT), dtype=np.int64)
+        swa_model.eval()
+        with torch.no_grad():
+            for x, target, valid in val_loader:
+                x = x.to(device)
+                pred = swa_model(x).argmax(dim=1).cpu().numpy()[0]
+                confusion_matrix_update(swa_cm, pred, target.numpy()[0], valid.numpy()[0], N_CLASSES_DEFAULT)
+        swa_ious = per_class_iou(swa_cm)
+        swa_miou = float(np.nanmean(swa_ious))
+        print(f"SWA final model: val mIoU={swa_miou:.4f} (compare against best_miou={best_miou:.4f} at epoch {best_epoch} -- "
+              f"NOT assumed better, reported either way)")
+        for c, iou in enumerate(swa_ious):
+            print(f"  SWA class {c} IoU: {iou if not np.isnan(iou) else 'n/a (no pixels)'}")
+
+        torch.save({"epoch": epochs - 1, "model_state": swa_model.module.state_dict()}, out_dir / "swa_final.pt")
+        with open(training_log_path, "a") as f:
+            f.write(json.dumps({
+                "epoch": epochs - 1, "swa": True, "val_miou": swa_miou,
+                "per_class_iou": [None if np.isnan(v) else float(v) for v in swa_ious],
+                "best_epoch_so_far": best_epoch, "best_miou_so_far": best_miou,
+            }) + "\n")
+        print(f"Saved SWA final model to {out_dir / 'swa_final.pt'}")
 
 
 if __name__ == "__main__":
@@ -842,6 +929,22 @@ if __name__ == "__main__":
              "caching train+val together would not on a disk-constrained shared server. No effect "
              "without --cache-dir.",
     )
+    parser.add_argument(
+        "--scheduler", default="onecycle", choices=["onecycle", "warm_restarts"],
+        help="LR schedule -- 'onecycle' (default, unchanged behaviour) or 'warm_restarts' "
+             "(CosineAnnealingWarmRestarts, Bible Part G.30 -- periodically resets LR to break a "
+             "late-stage plateau instead of monotonically decaying to ~0).",
+    )
+    parser.add_argument("--warm-restart-t0-epochs", type=int, default=10,
+                         help="T_0 in epochs for --scheduler warm_restarts (first restart cycle length).")
+    parser.add_argument("--warm-restart-t-mult", type=int, default=2,
+                         help="T_mult for --scheduler warm_restarts (each cycle after the first is T_mult times longer).")
+    parser.add_argument("--swa-epochs", type=int, default=0,
+                         help="Stochastic Weight Averaging (Bible Part G.30) over the FINAL N epochs of "
+                              "training -- 0 (default) disables it entirely, matching prior behaviour. "
+                              "Saves an additional swa_final.pt, evaluated and reported separately from best.pt.")
+    parser.add_argument("--swa-lr", type=float, default=1e-5,
+                         help="Constant LR SWALR anneals to and holds during the SWA phase.")
     args = parser.parse_args()
 
     train(
@@ -859,6 +962,11 @@ if __name__ == "__main__":
         confusion_ema_decay=args.confusion_ema_decay,
         cache_dir=args.cache_dir,
         cache_val_only=args.cache_val_only,
+        scheduler_type=args.scheduler,
+        warm_restart_t0_epochs=args.warm_restart_t0_epochs,
+        warm_restart_t_mult=args.warm_restart_t_mult,
+        swa_epochs=args.swa_epochs,
+        swa_lr=args.swa_lr,
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
