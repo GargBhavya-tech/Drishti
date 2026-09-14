@@ -2,6 +2,16 @@
 
 :root {
   color-scheme: dark;
+  --surface-canvas: #07101a;
+  --surface-panel: #09101b;
+  --surface-elevated: #101a28;
+  --text-primary: #e7eef8;
+  --text-secondary: #9aa8bc;
+  --text-muted: #64748b;
+  --border-subtle: rgba(255, 255, 255, 0.1);
+  --accent-cyan: #4fd1ff;
+  --status-amber: #ffcf70;
+  --status-red: #ff6b63;
 }
 
 html,
@@ -9,11 +19,49 @@ body,
 #root {
   height: 100%;
   margin: 0;
-  background: #05070c;
-  color: #cbd5e1;
+  background: var(--surface-canvas);
+  color: var(--text-primary);
   font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
+}
+
+button,
+input[type="range"] {
+  touch-action: manipulation;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled,
+input:disabled {
+  cursor: not-allowed;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 2px;
+}
+
+.skip-link {
+  position: fixed;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 100;
+  transform: translateY(-150%);
+  border: 1px solid var(--accent-cyan);
+  border-radius: 0.5rem;
+  background: var(--surface-elevated);
+  padding: 0.65rem 0.9rem;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  transition: transform 180ms ease-out;
+}
+
+.skip-link:focus {
+  transform: translateY(0);
 }
 
 .font-mono-tech {
