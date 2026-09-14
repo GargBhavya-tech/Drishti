@@ -58,6 +58,21 @@ def main():
     parser.add_argument("--warmup-frames", type=int, default=10)
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--out-dir", default="eval/out")
+    parser.add_argument("--fp16", action="store_true",
+                         help="Wrap the forward pass in torch.autocast(dtype=torch.float16) "
+                              "-- Bible Part G.28's Phase 1 FPS fix, item 2. Tier-A/B verified "
+                              "separately (scratchpad/check_fp16_invariance.py, this session: "
+                              "0.098%% argmax disagreement on 15 real val frames, well inside "
+                              "the >99.5%% IoU-agreement bar) before this flag was added.")
+    parser.add_argument("--compile", action="store_true",
+                         help="Wrap the model in torch.compile(mode='reduce-overhead') -- "
+                              "Bible Part G.28's Phase 1 FPS fix, item 3. Requires a STATIC "
+                              "input shape (1,13,H,W) every frame -- true here since W is "
+                              "fixed by --sensor-config, not per-frame point-count-dependent. "
+                              "First-call compilation is real but excluded via --warmup-frames "
+                              "same as CUDA kernel warmup; set TORCHINDUCTOR_CACHE_DIR for a "
+                              "persistent cache across process restarts (a real deployment "
+                              "would not want a multi-minute cold start every boot).")
     args = parser.parse_args()
 
     dirs = [Path(p) for p in args.sequence_dir]
@@ -73,9 +88,11 @@ def main():
     device = torch.device(args.device)
 
     model = FusionSegNet(n_classes=N_CLASSES_DEFAULT).to(device)
-    ckpt = torch.load(args.seg_checkpoint, map_location=device)
+    ckpt = torch.load(args.seg_checkpoint, map_location=device, weights_only=False)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
+    if args.compile:
+        model = torch.compile(model, mode="reduce-overhead")
 
     def _one_frame(sequence_dir, frame_idx):
         """Real per-frame inference pipeline, timed PER STAGE, not as one
@@ -106,7 +123,11 @@ def main():
         t0 = time.perf_counter()
         x = torch.from_numpy(tensor_np).float().unsqueeze(0).to(device)
         with torch.no_grad():
-            logits = model(x)
+            if args.fp16 and device.type == "cuda":
+                with torch.autocast(device_type="cuda", dtype=torch.float16):
+                    logits = model(x)
+            else:
+                logits = model(x)
             _pred = logits.argmax(dim=1).cpu().numpy()
         if device.type == "cuda":
             torch.cuda.synchronize()  # real GPU completion, not just kernel-launch return

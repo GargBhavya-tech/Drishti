@@ -82,7 +82,7 @@ def main():
     device = torch.device(args.device)
 
     model = FusionSegNet(n_classes=N_CLASSES_DEFAULT).to(device)
-    ckpt = torch.load(args.seg_checkpoint, map_location=device)
+    ckpt = torch.load(args.seg_checkpoint, map_location=device, weights_only=False)
     model.load_state_dict(ckpt["model_state"])
     model.eval()
     print(f"Loaded checkpoint from epoch {ckpt.get('epoch')} (should match {best_epoch} above -- "
@@ -134,11 +134,33 @@ def main():
     print(f"\n{n_dropped} classes dropped by >0.01 IoU, {n_improved} improved by >0.01 IoU, "
           f"{len(results) - n_dropped - n_improved} roughly unchanged (of {sum(1 for r in results if r['delta'] is not None)} comparable classes)")
 
+    # Where do a class's real points actually land when the network rarely
+    # predicts that class? Reuses the SAME confusion matrix already built
+    # above (cm[true_class, pred_class]) -- no second expensive pass over
+    # the val set -- to answer a real safety question the per-class IoU
+    # table alone can't: a class that collapses to 0 IoU could be leaking
+    # into a SAFE class (a real regression) or into another HAZARD class
+    # (harmless to the Conservatism Invariant, which costs hazard classes
+    # equally-or-worse). Printed for every class, not just NON_TRAVERSABLE,
+    # since this is cheap once the matrix exists and any class could hide
+    # the same failure mode.
+    print(f"\nPer-class prediction breakdown (where do a class's REAL points actually get predicted?):")
+    for i, name in enumerate(names):
+        row_total = int(cm[i].sum())
+        if row_total == 0:
+            continue
+        top = np.argsort(cm[i])[::-1][:4]
+        breakdown = ", ".join(f"{names[j]}={cm[i][j]/row_total*100:.1f}%" for j in top if cm[i][j] > 0)
+        print(f"  {name:>18} ({row_total} real points): {breakdown}")
+
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "all_class_drift.json"
     with open(out_path, "w") as f:
-        json.dump({"best_epoch": best_epoch, "n_val_frames": len(val_items), "per_class": results}, f, indent=2)
+        json.dump({
+            "best_epoch": best_epoch, "n_val_frames": len(val_items), "per_class": results,
+            "confusion_matrix": cm.tolist(), "class_names": names,
+        }, f, indent=2)
     print(f"\nSaved to {out_path}")
 
 
