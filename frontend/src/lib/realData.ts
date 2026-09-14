@@ -32,11 +32,17 @@ export interface LevelInfo {
 export interface RealManifest {
   checkpointPath: string
   trainedEpoch: number
+  sequenceDir: string
+  rellisFrameIndices: number[]
   nFrames: number
   classNames: string[]
   levels: LevelInfo[]
   pointCounts: number[]
   cellCounts: number[]
+  accumulatedCellCounts: number[]
+  detectionCounts: number[]
+  hasAccumulatedCells: boolean
+  hasDetections: boolean
 }
 
 export interface RealFrame {
@@ -77,6 +83,8 @@ export function loadManifest(baseUrl: string = DEFAULT_BASE_URL): Promise<RealMa
         (raw): RealManifest => ({
           checkpointPath: raw.checkpoint_path,
           trainedEpoch: raw.trained_epoch,
+          sequenceDir: raw.sequence_dir ?? "RELLIS-3D export",
+          rellisFrameIndices: raw.rellis_frame_indices ?? [],
           nFrames: raw.n_frames,
           classNames: raw.class_names,
           levels: raw.levels.map((l: { level: number; cell_size_m: number; nyquist_radius_m: number }) => ({
@@ -86,6 +94,10 @@ export function loadManifest(baseUrl: string = DEFAULT_BASE_URL): Promise<RealMa
           })),
           pointCounts: raw.point_counts,
           cellCounts: raw.cell_counts,
+          accumulatedCellCounts: raw.accumulated_cell_counts ?? raw.cell_counts,
+          detectionCounts: raw.detection_counts ?? [],
+          hasAccumulatedCells: raw.has_accumulated_cells ?? false,
+          hasDetections: raw.has_detections ?? false,
         }),
       )
   }
