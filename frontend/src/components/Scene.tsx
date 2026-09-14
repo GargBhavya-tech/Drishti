@@ -8,7 +8,7 @@
  */
 
 import { Line, OrbitControls } from "@react-three/drei"
-import { Canvas, useFrame } from "@react-three/fiber"
+import { Canvas, useFrame, useThree } from "@react-three/fiber"
 import { useEffect, useMemo, useRef } from "react"
 import * as THREE from "three"
 import { findGazeTarget, foveaSampleGrid } from "../lib/foveaMath"
@@ -123,7 +123,7 @@ function CellField({ frame }: { frame: DemoFrame }) {
   })
 
   return (
-    <instancedMesh ref={meshRef} args={[undefined, undefined, MAX_INSTANCES]} castShadow receiveShadow>
+    <instancedMesh ref={meshRef} args={[undefined, undefined, MAX_INSTANCES]}>
       <boxGeometry args={[1, 1, 1]} />
       <meshStandardMaterial roughness={0.7} metalness={0.05} />
     </instancedMesh>
@@ -317,17 +317,27 @@ function GroundGrid() {
   )
 }
 
-function Rig() {
-  useFrame((state) => {
-    state.camera.lookAt(0, 0, 0)
-  })
+function CameraPresetController() {
+  const cameraPreset = useDashboardStore((s) => s.cameraPreset)
+  const camera = useThree((state) => state.camera)
+
+  useEffect(() => {
+    const presets = {
+      driver: { position: [12, 2.8, 0] as const, target: [0, 0.2, 0] as const },
+      tactical: { position: [14, 12, 14] as const, target: [0, 0, 0] as const },
+      hazard: { position: [4, 4.5, -8] as const, target: [-0.3, 0.1, -3] as const },
+    }
+    const preset = presets[cameraPreset]
+    camera.position.set(preset.position[0], preset.position[1], preset.position[2])
+    camera.lookAt(preset.target[0], preset.target[1], preset.target[2])
+  }, [camera, cameraPreset])
+
   return null
 }
 
 export function Scene({ frame }: { frame: DemoFrame }) {
   return (
     <Canvas
-      shadows
       camera={{ position: [14, 12, 14], fov: 42 }}
       dpr={[1, 1.75]}
       gl={{ antialias: true }}
@@ -335,20 +345,14 @@ export function Scene({ frame }: { frame: DemoFrame }) {
       <color attach="background" args={["#05070c"]} />
       <fog attach="fog" args={["#05070c", 18, 42]} />
       <ambientLight intensity={0.35} />
-      <directionalLight
-        position={[10, 16, 6]}
-        intensity={1.15}
-        castShadow
-        shadow-mapSize-width={1024}
-        shadow-mapSize-height={1024}
-      />
+      <directionalLight position={[10, 16, 6]} intensity={1.15} />
       <pointLight position={[-8, 6, -8]} intensity={0.25} color="#4fd1ff" />
       <GroundGrid />
       <CellField frame={frame} />
       <FoveaOverlay />
       <PlannedPath frame={frame} />
       <GazeBeam frame={frame} />
-      <Rig />
+      <CameraPresetController />
       <OrbitControls
         enableDamping
         dampingFactor={0.08}

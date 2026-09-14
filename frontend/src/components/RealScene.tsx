@@ -1,184 +1,162 @@
 /**
- * RealScene.tsx -- the REAL-data 3D view: real RELLIS-3D LiDAR points,
- * real FusionSegNet predictions, real multi-resolution grid, all from
- * eval/export_frames.py's exported binaries (see that script's own
- * docstring for exactly what "real" means here and its one honest
- * simplification: a self-contained per-sweep snapshot, not a live
- * temporally-accumulated map).
- *
- * Deliberately self-contained (its own play/pause/scrub state) rather
- * than wired into the existing Zustand store's frameIndex -- the mock
- * demo sequence (48 frames) and this real export (however many frames
- * were exported) are independent timelines with different lengths, and
- * unifying them was a materially bigger refactor than this pass's
- * scope. Toggled in from App.tsx as an alternate top-level view.
+ * Renders the locally exported RELLIS-3D run. The scene has no
+ * invented predictions: it shows only labels and instances present in
+ * the export, then reports its exact metadata to the dashboard shell.
  */
 
-import { Bloom, EffectComposer } from "@react-three/postprocessing"
 import { OrbitControls } from "@react-three/drei"
-import { Canvas } from "@react-three/fiber"
-import { useEffect, useRef, useState } from "react"
+import { Bloom, EffectComposer } from "@react-three/postprocessing"
+import { Canvas, useThree } from "@react-three/fiber"
+import { useEffect, useState } from "react"
 import * as THREE from "three"
 import type { RealFrame, RealManifest } from "../lib/realData"
 import { loadFrame, loadManifest } from "../lib/realData"
+import { useDashboardStore } from "../state/store"
 import { DetectionMarkers } from "./DetectionMarkers"
 import { RealPointCloud } from "./RealPointCloud"
 import { RealTerrain } from "./RealTerrain"
+import { ResolutionLegend } from "./ResolutionLegend"
 import { VariableResGrid } from "./VariableResGrid"
 
-function LoadingOverlay({ message }: { message: string }) {
-  return (
-    <div className="absolute inset-0 flex items-center justify-center bg-[#05070c]">
-      <div className="text-slate-400 font-mono-tech text-sm">{message}</div>
-    </div>
-  )
-}
-
-function RealPlaybackBar({
-  frameIndex,
-  frameCount,
-  isPlaying,
-  onScrub,
-  onTogglePlay,
-}: {
+export interface RealSceneStatus {
+  manifest: RealManifest
+  frame: RealFrame
   frameIndex: number
-  frameCount: number
-  isPlaying: boolean
-  onScrub: (i: number) => void
-  onTogglePlay: () => void
-}) {
-  return (
-    <div className="absolute bottom-3 left-3 right-3 flex items-center gap-3 rounded-xl border border-white/10 bg-black/40 backdrop-blur-md px-4 py-2.5">
-      <button
-        onClick={onTogglePlay}
-        className="h-8 w-8 flex items-center justify-center rounded-full border border-white/10 bg-white/5 text-slate-200"
-      >
-        {isPlaying ? "||" : ">"}
-      </button>
-      <input
-        type="range"
-        min={0}
-        max={Math.max(0, frameCount - 1)}
-        value={frameIndex}
-        onChange={(e) => onScrub(Number(e.target.value))}
-        className="flex-1 accent-cyan-400"
-      />
-      <span className="font-mono-tech text-xs text-slate-400 w-16 text-right">
-        {String(frameIndex + 1).padStart(2, "0")}/{frameCount}
-      </span>
-    </div>
-  )
+  useAccumulated: boolean
 }
 
-function RealLegend({ manifest, detectionCount }: { manifest: RealManifest; detectionCount: number }) {
+function LoadingOverlay({ message, error = false }: { message: string; error?: boolean }) {
   return (
-    <div className="absolute top-3 left-3 rounded-xl border border-white/10 bg-black/40 backdrop-blur-md px-3 py-2 max-w-xs">
-      <div className="text-[11px] uppercase tracking-widest text-cyan-400/80 mb-1">Real data</div>
-      <div className="text-[11px] text-slate-400 leading-relaxed">
-        Real RELLIS-3D LiDAR + real FusionSegNet (checkpoint epoch {manifest.trainedEpoch}). Points, terrain, and
-        resolution rings are computed from a real trained model on real off-road data -- not synthetic.
-      </div>
-      <div className="text-[11px] text-amber-300/90 mt-1">
-        {detectionCount} real object detection{detectionCount === 1 ? "" : "s"} this frame (wireframe boxes, geometric detector)
+    <div className="absolute inset-0 flex items-center justify-center bg-[#07101a]" role={error ? "alert" : "status"} aria-live="polite">
+      <div className="max-w-sm rounded-xl border border-white/10 bg-white/[0.035] px-5 py-4 text-center shadow-xl">
+        <p className={`font-mono-tech text-xs ${error ? "text-amber-200" : "text-slate-300"}`}>{message}</p>
+        {error && <p className="mt-2 text-[11px] leading-4 text-slate-500">Check that the frontend export is available at <code>/data/manifest.json</code>, then re-open real export mode.</p>}
       </div>
     </div>
   )
 }
 
-export function RealScene() {
-  const [manifest, setManifest] = useState<RealManifest | null>(null)
-  const [frame, setFrame] = useState<RealFrame | null>(null)
-  const [frameIndex, setFrameIndex] = useState(0)
-  const [isPlaying, setIsPlaying] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  // Toggles between this frame's own single-sweep cells and the real
-  // multi-frame world-frame memory (export_frames.py's _WorldCellMemory)
-  // -- off by default so the existing single-sweep view is unchanged
-  // unless a viewer explicitly asks to see accumulation.
-  const [useAccumulated, setUseAccumulated] = useState(false)
-  const rafRef = useRef<number | null>(null)
-  const lastTickRef = useRef(0)
+function CameraPresetController() {
+  const cameraPreset = useDashboardStore((s) => s.cameraPreset)
+  const camera = useThree((state) => state.camera)
 
   useEffect(() => {
+    const presets = {
+      driver: { position: [12, 3.2, 0] as const, target: [0, 0.35, 0] as const },
+      tactical: { position: [8, 10, 8] as const, target: [0, 0, 0] as const },
+      hazard: { position: [5.5, 3.5, -7] as const, target: [0.8, 0.25, 0] as const },
+    }
+    const preset = presets[cameraPreset]
+    camera.position.set(preset.position[0], preset.position[1], preset.position[2])
+    camera.lookAt(preset.target[0], preset.target[1], preset.target[2])
+  }, [camera, cameraPreset])
+
+  return null
+}
+
+function RealLegend({ manifest, frameIndex, detectionCount }: { manifest: RealManifest; frameIndex: number; detectionCount: number }) {
+  const sourceFrame = manifest.rellisFrameIndices[frameIndex]
+  return (
+    <div className="max-w-sm rounded-xl border border-white/10 bg-[#09101b]/80 px-3 py-2.5 shadow-lg backdrop-blur-md">
+      <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-cyan-300/85">Measured export</p>
+      <p className="mt-1 text-[11px] leading-4 text-slate-300">
+        RELLIS-3D {sourceFrame === undefined ? `export frame ${frameIndex + 1}` : `frame ${sourceFrame}`} · epoch {manifest.trainedEpoch} · semantic points + 2.5D cells
+      </p>
+      <p className="mt-1 text-[10px] text-amber-100/90">{detectionCount} geometric object detection{detectionCount === 1 ? "" : "s"} in this frame</p>
+    </div>
+  )
+}
+
+export function RealScene({ onStatusChange }: { onStatusChange?: (status: RealSceneStatus | null) => void }) {
+  const [manifest, setManifest] = useState<RealManifest | null>(null)
+  const [frame, setFrame] = useState<RealFrame | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const realFrameIndex = useDashboardStore((s) => s.realFrameIndex)
+  const realUseAccumulated = useDashboardStore((s) => s.realUseAccumulated)
+  const showRealTerrain = useDashboardStore((s) => s.showRealTerrain)
+  const showRealPoints = useDashboardStore((s) => s.showRealPoints)
+  const showRealDetections = useDashboardStore((s) => s.showRealDetections)
+  const showResolutionGrid = useDashboardStore((s) => s.showResolutionGrid)
+  const setRealFrameCount = useDashboardStore((s) => s.setRealFrameCount)
+
+  useEffect(() => {
+    let mounted = true
     loadManifest()
-      .then(setManifest)
-      .catch(() => setError("Could not load /data/manifest.json -- run eval/export_frames.py first."))
-  }, [])
+      .then((loadedManifest) => {
+        if (!mounted) return
+        setManifest(loadedManifest)
+        setRealFrameCount(loadedManifest.nFrames)
+      })
+      .catch(() => {
+        if (mounted) setError("Could not load the real-data manifest.")
+      })
+    return () => {
+      mounted = false
+    }
+  }, [setRealFrameCount])
 
   useEffect(() => {
     if (!manifest) return
     let cancelled = false
-    loadFrame(frameIndex).then((f) => {
-      if (!cancelled) setFrame(f)
-    })
+    loadFrame(realFrameIndex)
+      .then((loadedFrame) => {
+        if (!cancelled) setFrame(loadedFrame)
+      })
+      .catch(() => {
+        if (!cancelled) setError(`Could not load exported frame ${realFrameIndex + 1}.`)
+      })
     return () => {
       cancelled = true
     }
-  }, [manifest, frameIndex])
+  }, [manifest, realFrameIndex])
 
   useEffect(() => {
-    if (!isPlaying || !manifest) return
-    const FRAME_MS = 260
-    const tick = (t: number) => {
-      if (t - lastTickRef.current >= FRAME_MS) {
-        setFrameIndex((i) => (i + 1) % manifest.nFrames)
-        lastTickRef.current = t
-      }
-      rafRef.current = requestAnimationFrame(tick)
+    if (!manifest || !frame || frame.frameIndex !== realFrameIndex) {
+      onStatusChange?.(null)
+      return
     }
-    rafRef.current = requestAnimationFrame(tick)
-    return () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current)
-    }
-  }, [isPlaying, manifest])
+    onStatusChange?.({ manifest, frame, frameIndex: realFrameIndex, useAccumulated: realUseAccumulated })
+  }, [frame, manifest, onStatusChange, realFrameIndex, realUseAccumulated])
 
-  if (error) return <LoadingOverlay message={error} />
-  if (!manifest) return <LoadingOverlay message="Loading real data manifest..." />
-  if (!frame) return <LoadingOverlay message={`Loading frame ${frameIndex + 1}...`} />
+  useEffect(() => () => onStatusChange?.(null), [onStatusChange])
+
+  if (error) return <LoadingOverlay message={error} error />
+  if (!manifest) return <LoadingOverlay message="Loading real-data manifest…" />
+  if (!frame || frame.frameIndex !== realFrameIndex) return <LoadingOverlay message={`Loading export frame ${realFrameIndex + 1}…`} />
 
   return (
-    <div className="relative w-full h-full">
+    <div className="relative h-full w-full">
       <Canvas
         shadows={false}
-        camera={{ position: [8, 7, 8], fov: 45 }}
+        camera={{ position: [8, 10, 8], fov: 45 }}
         dpr={[1, 1.75]}
         gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping, toneMappingExposure: 1.1 }}
       >
-        <color attach="background" args={["#05070c"]} />
-        <fog attach="fog" args={["#05070c", 14, 45]} />
+        <color attach="background" args={["#07101a"]} />
+        <fog attach="fog" args={["#07101a", 14, 45]} />
         <ambientLight intensity={0.4} />
         <directionalLight position={[10, 16, 6]} intensity={1.2} />
         <pointLight position={[-8, 6, -8]} intensity={0.2} color="#4fd1ff" />
 
-        <VariableResGrid levels={manifest.levels} />
-        <RealTerrain frame={frame} levels={manifest.levels} useAccumulated={useAccumulated} />
-        <RealPointCloud frame={frame} />
-        <DetectionMarkers frame={frame} />
-
+        {showResolutionGrid && <VariableResGrid levels={manifest.levels} />}
+        {showRealTerrain && <RealTerrain frame={frame} levels={manifest.levels} useAccumulated={realUseAccumulated} />}
+        {showRealPoints && <RealPointCloud frame={frame} />}
+        {showRealDetections && <DetectionMarkers frame={frame} />}
+        <CameraPresetController />
         <OrbitControls enableDamping dampingFactor={0.08} minDistance={2} maxDistance={35} maxPolarAngle={Math.PI / 2.05} />
 
         <EffectComposer multisampling={0}>
           <Bloom luminanceThreshold={0.7} luminanceSmoothing={0.2} intensity={0.35} mipmapBlur />
         </EffectComposer>
       </Canvas>
-      <button
-        onClick={() => setUseAccumulated((v) => !v)}
-        className="absolute top-3 right-3 rounded-lg border border-white/10 bg-black/40 backdrop-blur-md px-3 py-1.5 text-[11px] font-mono-tech text-slate-200"
-        title="Toggle between this frame's own single-sweep cells and the real multi-frame world-frame memory (export_frames.py's _WorldCellMemory)"
-      >
-        {useAccumulated ? "● Live memory (accumulated)" : "○ Single-sweep snapshot"}
-      </button>
-      <RealLegend manifest={manifest} detectionCount={frame.detectionCount} />
-      <RealPlaybackBar
-        frameIndex={frameIndex}
-        frameCount={manifest.nFrames}
-        isPlaying={isPlaying}
-        onScrub={(i) => {
-          setIsPlaying(false)
-          setFrameIndex(i)
-        }}
-        onTogglePlay={() => setIsPlaying((p) => !p)}
-      />
+
+      <div className="pointer-events-none absolute left-3 top-3 flex max-w-[calc(100%-1.5rem)] flex-col gap-2 sm:max-w-sm">
+        <RealLegend manifest={manifest} frameIndex={realFrameIndex} detectionCount={frame.detectionCount} />
+        <ResolutionLegend levels={manifest.levels} />
+      </div>
+      <div className="pointer-events-none absolute bottom-3 left-3 rounded-md border border-white/10 bg-[#09101b]/75 px-2.5 py-1.5 font-mono-tech text-[10px] text-slate-400 backdrop-blur-md">
+        Drag to orbit · scroll to zoom · camera presets above
+      </div>
     </div>
   )
 }
