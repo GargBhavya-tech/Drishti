@@ -13,6 +13,7 @@ data/
 *.pth
 *.npz
 checkpoints/
+checkpoints_*/
 checkpoints_remote/
 checkpoints_multi_remote/
 checkpoints_multi_v2_remote/
@@ -22,3 +23,4 @@ val_metrics_epoch*.json
 # ------ JSON runtime outputs ------
 *.json
 !frontend/**/*.json
+!story/**/*.json
