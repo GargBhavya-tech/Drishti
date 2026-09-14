@@ -58,10 +58,10 @@ def ground_prior_channel_from_points(img: RangeImage, ground: GroundPriorResult)
     computed (Ticket #23) -- a hint channel, not a filter (Bible Part
     5.2: ground_prior feeds the network as input channel 7; it never
     strips points, it labels them)."""
-    channel = np.zeros((img.H, img.W), dtype=np.float64)
+    channel = np.zeros((img.H, img.W), dtype=np.float32)
     touched = img.point_index >= 0
     src = img.point_index[touched]
-    channel[touched] = ground.is_ground[src].astype(np.float64)
+    channel[touched] = ground.is_ground[src].astype(np.float32)
     return channel
 
 
@@ -73,9 +73,9 @@ def _raw_channels(img: RangeImage, ground_prior_channel: np.ndarray) -> np.ndarr
     return np.stack(
         [
             img.x, img.y, img.z, img.range, calibrated_intensity,
-            img.valid_mask.astype(np.float64),
+            img.valid_mask.astype(np.float32),
             ground_prior_channel,
-            img.occlusion_count.astype(np.float64),
+            img.occlusion_count.astype(np.float32),
             img.occlusion_spread,
             geom.normal_x, geom.normal_y, geom.normal_z, geom.curvature,
         ],
