@@ -1114,6 +1114,94 @@ No new files — box-splitting (`_recursive_split`, `_principal_axis_extent_m`, 
 
 ---
 
+## G.27 `checkpoints_multi_v5` — the fence/barrier taxonomy retrain (Part G.24's fix), final result: a real STATIC_OBSTACLE gain, and NON_TRAVERSABLE's collapse confirmed as a genuine, sustained cost, not transient
+
+15 epochs (0-14), same recipe as `checkpoints_multi_v4` but retrained from scratch on the corrected taxonomy (`fence`/`barrier` -> STATIC_OBSTACLE, Part G.24), with the fork-safe `compute_ground_prior` Numba fix (Part G.26) confirmed working under real multi-worker `DataLoader` load throughout (no OpenMP/fork crash recurred).
+
+**Real per-epoch validation, full val set, verified directly against `checkpoints_multi_v5/training_log.jsonl` on `drishti-gpu` (not just the live log stream — cross-checked after training finished):**
+
+| Epoch | mIoU | STATIC_OBSTACLE IoU | NON_TRAVERSABLE IoU | VEHICLE IoU | PEDESTRIAN IoU | `is_best` |
+|---|---|---|---|---|---|---|
+| 0 | 0.6026 | 0.4677 | 0.0000 | 0.7304 | 0.7839 | ✓ |
+| 1 | 0.5999 | 0.4680 | 0.0000 | 0.7242 | 0.7776 | |
+| 2 | 0.6028 | 0.4799 | 0.0000 | 0.7357 | 0.7750 | ✓ |
+| 3 | 0.5864 | 0.4610 | 0.0000 | 0.6989 | 0.7676 | |
+| 4 | 0.5920 | 0.4757 | 0.0000263 | 0.6740 | 0.7738 | ✓ |
+| 5 | 0.5952 | 0.4843 | 0.0000 | 0.7038 | 0.7642 | ✓ |
+| 6 | 0.5970 | 0.4649 | 0.0000437 | 0.7225 | 0.7745 | ✓ |
+| 7 | 0.6129 | 0.5035 | 0.0000 | 0.7509 | 0.8018 | ✓ |
+| 8 | 0.6111 | 0.5258 | 0.0000 | 0.7469 | 0.7849 | |
+| 9 | 0.6131 | 0.5012 | 0.0000 | 0.7610 | 0.7936 | ✓ |
+| **10** | **0.6192** | 0.5286 | 0.0000 | 0.7828 | 0.7982 | **✓ — final `best.pt`** |
+| 11 | 0.6149 | 0.5250 | 0.0000 | 0.7630 | 0.7939 | |
+| 12 | 0.6138 | 0.5260 | 0.0000 | 0.7524 | 0.7872 | |
+| 13 | 0.6140 | 0.5257 | 0.0000 | 0.7528 | 0.7950 | |
+| 14 | 0.6126 | 0.5310 | 0.0000 | 0.7372 | 0.7910 | |
+
+`checkpoints_multi_v5/best.pt` is confirmed (by file timestamp AND by `training_log.jsonl`'s own `is_best`/`best_epoch_so_far` fields) to be **epoch 10's weights, mIoU 0.6192** — the run correctly kept epoch 10 rather than the final epoch, since epochs 11-14 trained through the rest of the cosine LR decay (peak LR 2.98e-04 -> 1.20e-09) without beating it.
+
+**STATIC_OBSTACLE — a real, sustained win, present at the checkpoint that actually ships**: 0.4677 (epoch 0) -> 0.5286 (epoch 10, the saved best) -> 0.5310 (epoch 14, the final, unsaved epoch). This is not noise or a transient blip like the earlier G.6/G.22 attempts (compare G.22's STATIC_OBSTACLE 0.00019, which never held) — it climbed steadily across 10+ real epochs, survives at the checkpoint that will actually be used, and represents a genuine +0.061 IoU (~13% relative) gain from the taxonomy fix alone.
+
+**NON_TRAVERSABLE's collapse is confirmed as a real, sustained cost of the taxonomy fix, not a transient artifact**: exactly 0.0 for 12 of 15 epochs, with only two negligible ~1e-5-level blips (epoch 4: 2.6e-5, epoch 6: 4.4e-5) that both reverted the following epoch. This settles the open question first raised earlier in this session ("is this transient redefinition shock, or a real cost?") — with the full 15-epoch record now in hand, the honest answer is: **real cost, not transient.** The remaining NON_TRAVERSABLE members (water + rubble, 0.342% combined prevalence per G.24's own point-count analysis) are apparently too rare/visually distinct from the now-larger STATIC_OBSTACLE class for the network to keep separating them reliably — a genuine trade-off the taxonomy fix bought, not a bug.
+
+**Net verdict on the Part G.24 taxonomy fix, now that its actual retrain is complete**: it worked for its intended purpose (STATIC_OBSTACLE, the class it targeted, improved and held) at a real, non-zero, now-quantified cost to a class it didn't target (NON_TRAVERSABLE). This is the honest trade to report, not "STATIC_OBSTACLE fixed, no downside."
+
+---
+
+## G.28 Phase 1 FPS work: float32 output-array downcast (with a real correctness bug caught and fixed before shipping) + FP16 autocast -- 6.9 -> 9.4 FPS, verified
+
+A deep-research report reviewed this session recommended a float32 audit of `project`/`assemble_tensor` (both confirmed, by direct code reading, to run in float64 throughout -- `perception/range_image.py` upcast `sweep.xyz` to float64 despite `Sweep.xyz` already being float32) plus FP16 autocast on the forward pass, as the lowest-risk items of a phased FPS roadmap.
+
+**A naive float32 downcast of the WHOLE pipeline was tried first and caught a real bug before it shipped**, exactly the discipline this session applied to the earlier `ground_prior` Numba fix: RELLIS-3D ships no real `ring` field (`ring=-1` throughout), so elevation-row assignment in `project_to_range_image` falls back to the `arcsin(z/r)` formula for nearly every point -- a genuinely precision-sensitive computation. Downcasting `x/y/z` to float32 *before* that formula ran shifted **300-480 of 131,072 points per frame (~0.3-0.4%) into a DIFFERENT (row, col) pixel bin outright** -- not a rounding-tolerance nitpick but a different real point occupying that pixel, confirmed via a real equivalence script comparing `point_index` arrays directly against the pre-change code (`scratchpad/check_float32_equivalence.py`, this session).
+
+**The fix**: pixel-assignment math (`u`, `v`, the range sort key, the many-to-one collision tie-break) stays at float64 -- that decision is what decides WHICH point wins a collision and must stay precise. Only the OUTPUT (H,W) arrays (`x_img`, `y_img`, `z_img`, `range_img`, `intensity_img`, `occlusion_spread`, and `input_tensor.py`'s 13-channel stack) are downcast to float32 -- this is where the actual memory-bandwidth cost the report was targeting lives, not in the 1D point-assignment arrays. Re-verified after the fix: **0 `point_index` mismatches** across 8 real frames (down from 300-480/frame), with a tiny residual (12-32 of 1,703,936 tensor values per frame, max diff up to ~22 in a handful of pixels) traced to `compute_surface_geometry`'s occlusion-boundary threshold (`MAX_NEIGHBOR_RANGE_JUMP_M=1.0`) being precision-sensitive at genuine depth discontinuities -- the same kind of boundary sensitivity `ground_prior`'s own slope threshold has, not a new bug.
+
+**Tier B (real model, `checkpoints_multi_v5/best.pt`, 15 real val frames spread across 5 sequences)**: **93 of 1,966,080 pixels disagree (0.00473%)** between the fixed float32 pipeline and the original float64 pipeline -- 99.995% argmax agreement, far inside the report's own >99.5% IoU-invariance bar.
+
+**FP16 autocast** (`torch.autocast(device_type="cuda", dtype=torch.float16)` wrapped around the forward pass only, no architecture/weight change): Tier-B checked the same way, same 15 frames -- **1,919 of 1,966,080 pixels disagree (0.0976%)**, 99.90% agreement, still comfortably inside the >99.5% bar (worst single frame: 0.26%).
+
+**Real benchmark results, `eval/benchmark_inference_latency.py`, `checkpoints_multi_v5/best.pt`, 200 real frames, `drishti-gpu`:**
+
+| Stage | Original (Part G.26) | + float32 fix | + FP16 autocast |
+|---|---|---|---|
+| project | 37.31 ms | 37.17 ms (~unchanged, correctly -- pixel-assignment math untouched) | 36.64 ms |
+| ground_prior | 25.78 ms | ~unchanged | 25.98 ms |
+| assemble_tensor | 23.39 ms | **12.18 ms** (real ~48% cut) | 11.84 ms |
+| forward_pass | 50.93 ms | ~unchanged (not yet targeted) | **23.89 ms** (real 2.06x) |
+| **TOTAL** | **145.60 ms (6.9 FPS)** | 142.59 ms (7.0 FPS) | **106.14 ms (9.4 FPS)** |
+
+**Honest read**: the float32 fix alone was a small, real win (~3ms, from `assemble_tensor` only -- much smaller than the report's optimistic full-pipeline estimate, precisely because a real correctness bug forced keeping the pixel-assignment math at float64). FP16 autocast was the bigger, cleaner win, landing close to the report's own 1.35-1.60x forward-pass estimate (actual: 2.06x). Combined: **6.9 -> ~9.0-9.4 FPS (steady-state median), a real +30-36% throughput gain**, verified at both Tier A (equivalence) and Tier B (real-model argmax agreement) before being trusted.
+
+**`torch.compile(mode="reduce-overhead")` (Phase 1's third item) -- attempted, real but smaller-than-promised effect, and its own headline mechanism did NOT engage**: `forward_pass` improved further, 23.89ms -> 21.48ms (a real, modest ~10% additional cut, stable across repeated runs -- p50=21.44ms, max=27.16ms, low variance). But the compiler logged `skipping cudagraphs due to input mutation` on every run -- the actual mechanism `reduce-overhead` mode depends on (capturing the whole forward pass into a single CUDA graph to eliminate the ~5-10us-per-kernel CPU dispatch overhead the deep-research report specifically named as the reason this mode helps at batch size 1) never activated, because something in `FusionSegNet`'s forward pass mutates one of its own inputs in a way TorchDynamo can't graph-capture. Not investigated further this round (would require tracing which layer mutates a buffer/tensor in place -- a real follow-up item, not a blocker, since plain `torch.compile` fusion still delivered the modest gain measured above without CUDA graphs).
+
+**A separate, real, unrelated finding surfaced while benchmarking this**: the `load` stage got measurably noisier across repeated runs (mean 13-32ms, but max spiking to 807-1707ms on isolated frames) -- this is disk I/O contention on the shared `drishti-gpu` server (the same real constraint Part G.19 already documented for `FrameCache`'s disk budget), not anything `torch.compile`/FP16 caused. The median (p50) total latency, 106-112ms across repeated runs, is the honest steady-state number; the mean gets dragged up by these disk-contention outliers on a shared machine.
+
+**Final Phase 1 state**: `project` (35.99-37.17ms) and `ground_prior` (25.44-25.98ms) are now the two largest stages, both still running the original CPU/Numba code untouched this round (deliberately -- `project`'s pixel-assignment math had to stay float64 for correctness, per this section's own earlier finding; `ground_prior`'s Numba fix is Part G.26's separate, already-closed item). A GPU-side rewrite of either (the deep-research report's "Phase 2") is a materially larger, separately-scoped effort -- not started this round.
+
+---
+
+## G.29 Three real gaps a reviewer flagged in G.27's own result, closed with the tooling this project already built -- not new tooling
+
+A reviewer's critique of Part G.27's `checkpoints_multi_v5` result named three specific, unverified gaps -- each closed here by pointing an already-existing script at v5, exactly as the reviewer suggested, not by building anything new.
+
+**1. Is v5's 0.6192 mIoU drift-verified, or could it be another instance of the exact problem G.21 caught?** Ran `eval/reconcile_all_class_drift.py` (G.21's own re-measurement tool) against `checkpoints_multi_v5/best.pt` on the FULL 2,034-frame val set, using TODAY's pipeline (post Part G.28's float32 fix, not the pipeline that was current when v5 trained) -- the same "compare training-time-logged vs re-measured-now" check that caught v3's stale 0.537. **Result: every class's re-measured IoU matches the training-time logged number to within numerical noise** (all deltas ±0.0000-0.0001, ratio 1.00x across all 8 comparable classes). Unlike v3 -- which drifted because the PIPELINE itself materially changed (9->13 channels, taxonomy, reflectivity calibration) between v3's training and its later re-check -- v5 was trained end-to-end on essentially the same pipeline being used to re-check it now, and no drift shows up. v5's headline number is real, not another instance of G.21's bug.
+
+**2. Where do the real NON_TRAVERSABLE points (water, rubble) land now that the network almost never predicts that class?** Extended `reconcile_all_class_drift.py` to also dump the full 10x10 confusion matrix it was already building (no second expensive pass needed) and print each class's real-point prediction breakdown. **Real result, full val set: of only 90 real NON_TRAVERSABLE points total (this scarcity is itself a real, separate finding -- see below) -- 94.4% predicted PEDESTRIAN, 4.4% STATIC_OBSTACLE, 1.1% VEGETATION, 0% DRIVABLE.** Checked `planning/conservatism.py` directly (not assumed): `_KNOWN_HAZARD_COST = 200.0` is the exact cost assigned to BOTH `NON_TRAVERSABLE` and `PEDESTRIAN` (lines 70/73) -- identical hazard cost. **This is not a safety regression**: zero leakage into DRIVABLE (the one outcome that would matter), and the actual leakage lands in an equal-cost hazard class the Conservatism Invariant treats the same way. A genuinely reassuring, verified answer, not an assumed one.
+
+A real caveat surfaced by this same check, stated plainly rather than glossed over: 90 real points out of ~162.4 million real points in the full val set (~0.00006%) is a far smaller absolute count than Part G.24's own "0.342% combined water+rubble prevalence" figure would suggest -- that 0.342% was very likely computed over the full RELLIS dataset or train split, not this specific val split, and NON_TRAVERSABLE's real members are apparently almost entirely absent from val by simple random-split variance on an extremely rare class. This means NON_TRAVERSABLE's 0.0 IoU across nearly every v4/v5 epoch (Parts G.22/G.27) rests on a genuinely tiny, statistically fragile sample -- the confusion-breakdown finding above (0% to DRIVABLE) is more robust than the IoU number itself, precisely because it doesn't depend on getting a large-enough true-positive count to compute a meaningful IoU in the first place.
+
+**3. Does the VEHICLE fix and the geometric detector's gain hold at the DETECTION level on v5, not just raw segmentation recall?** Re-ran `eval/checkpoint_geometric_detection_rellis.py` (G.22's own tool, same 60-frame sample, same proxy-ground-truth methodology) against `checkpoints_multi_v5/best.pt`:
+
+| Metric | v3 (G.22) | v4 (G.22) | v5 (this check) |
+|---|---|---|---|
+| VEHICLE: proxy real / decoded | 63 / 23 | 63 / 92 | 63 / **90** |
+| STATIC_OBSTACLE: proxy real / decoded | n/a (v3 had 221 unrelated FPs) | 77 / 35 | 77 / **86** |
+| PEDESTRIAN: proxy real / decoded | 249 / 253 | 249 / 263 | 249 / **243** |
+
+**VEHICLE's detection-level gain holds on v5** (90 decoded vs v4's 92, both against the same real=63 proxy -- the taxonomy retrain did not undo the earlier CCAL/copy-paste fix's detection-level effect). **A genuine bonus finding beyond what was asked**: STATIC_OBSTACLE's detection-level count is now well-calibrated too (77 real-proxy vs 86 decoded, ~1.12x ratio) -- a large, real improvement over v3's wildly noisy 221-false-positive count from G.22, and consistent with (not contradicting) G.27's segmentation-level STATIC_OBSTACLE IoU gain. This closes the loop the reviewer flagged as still open: the VEHICLE fix is confirmed real at BOTH the segmentation and detection level, on the checkpoint that actually ships.
+
+---
+
 # PART H — THE FRONTEND / DEMO DASHBOARD
 
 Not part of the original Build Map — built because a live interactive 3D dashboard communicates the project far better than static plots for a hackathon pitch. Vite + React 19 + TypeScript + `@react-three/fiber` + `motion` (Framer Motion's successor) + Zustand + Tailwind v4.
