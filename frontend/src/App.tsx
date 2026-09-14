@@ -1,32 +1,36 @@
-/**
- * App.tsx -- the dashboard shell: header, main 3D view (or split-
- * screen), HUD/overlay/speed-gauge sidebar, and the bottom control
- * strip (timeline, gamma slider, split-screen toggle).
- */
-
 import { AnimatePresence, motion } from "motion/react"
-import { CompareWipeToggle, GammaSlider, RealDataToggle, SplitScreenToggle, Timeline } from "./components/Controls"
+import { useCallback, useState } from "react"
+import { CompareWipeToggle, EvidenceToggle, GammaSlider, RealTimeline, SplitScreenToggle, Timeline } from "./components/Controls"
 import { ComparisonWipe } from "./components/ComparisonWipe"
+import { DecisionStack } from "./components/DecisionStack"
+import { EvidenceDrawer } from "./components/EvidenceDrawer"
 import { GovernorPanel } from "./components/GovernorPanel"
 import { HUD } from "./components/HUD"
-import { RealScene } from "./components/RealScene"
+import { RealLayerControls } from "./components/RealLayerControls"
+import { RealScene, type RealSceneStatus } from "./components/RealScene"
+import { RunStatusBar } from "./components/RunStatusBar"
 import { Scene } from "./components/Scene"
+import { SceneToolbar } from "./components/SceneToolbar"
 import { SpeedGauge } from "./components/SpeedGauge"
 import { SplitScreen } from "./components/SplitScreen"
 import { DEMO_SEQUENCE } from "./lib/mockData"
 import { motionTokens } from "./lib/theme"
 import { useDashboardStore } from "./state/store"
 
-function Header() {
+function SyntheticControls({ frameCount }: { frameCount: number }) {
   return (
-    <div className="flex items-center justify-between px-5 py-3 border-b border-white/8">
-      <div className="flex items-center gap-3">
-        <div className="h-2 w-2 rounded-full bg-cyan-400 shadow-[0_0_8px_2px_rgba(79,209,255,0.6)]" />
-        <span className="font-mono-tech text-sm tracking-[0.3em] text-slate-200">DRISHTI</span>
-        <span className="text-xs text-slate-500">adaptive variable-resolution 2.5D LiDAR mapping</span>
+    <>
+      <Timeline frameCount={frameCount} />
+      <div className="hidden h-7 w-px bg-white/10 md:block" />
+      <div className="hidden xl:block">
+        <GammaSlider />
       </div>
-      <div className="text-[11px] text-slate-600 font-mono-tech">demo sequence -- synthetic, frontend-only</div>
-    </div>
+      <div className="hidden h-7 w-px bg-white/10 md:block" />
+      <div className="flex shrink-0 items-center gap-2">
+        <SplitScreenToggle />
+        <CompareWipeToggle />
+      </div>
+    </>
   )
 }
 
@@ -35,16 +39,36 @@ export default function App() {
   const splitScreen = useDashboardStore((s) => s.splitScreen)
   const compareWipe = useDashboardStore((s) => s.compareWipe)
   const realDataMode = useDashboardStore((s) => s.realDataMode)
+  const [realStatus, setRealStatus] = useState<RealSceneStatus | null>(null)
   const frame = DEMO_SEQUENCE[frameIndex]
 
-  return (
-    <div className="h-screen w-screen flex flex-col bg-[#05070c] text-slate-200">
-      <Header />
+  const handleRealStatus = useCallback((status: RealSceneStatus | null) => {
+    setRealStatus(status)
+  }, [])
 
-      <div className="flex-1 flex min-h-0">
-        <div className="relative flex-1 min-w-0">
+  return (
+    <div className="relative flex h-dvh w-screen flex-col overflow-hidden bg-[#07101a] text-slate-200">
+      <a className="skip-link" href="#perception-map">Skip to perception map</a>
+      <RunStatusBar realStatus={realStatus} />
+
+      <main className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        <section id="perception-map" aria-label="3D LiDAR perception map" className="relative min-h-[48dvh] min-w-0 flex-1 bg-[#07101a] lg:min-h-0">
+          <div className="pointer-events-none absolute right-3 top-3 z-10">
+            <SceneToolbar />
+          </div>
           <AnimatePresence mode="wait">
-            {realDataMode ? null : compareWipe ? (
+            {realDataMode ? (
+              <motion.div
+                key="real-export"
+                className="absolute inset-0"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: motionTokens.duration.fast }}
+              >
+                <RealScene onStatusChange={handleRealStatus} />
+              </motion.div>
+            ) : compareWipe ? (
               <motion.div
                 key="wipe"
                 className="absolute inset-0"
@@ -68,7 +92,7 @@ export default function App() {
               </motion.div>
             ) : (
               <motion.div
-                key="single"
+                key="synthetic"
                 className="absolute inset-0"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -79,29 +103,28 @@ export default function App() {
               </motion.div>
             )}
           </AnimatePresence>
-          {realDataMode && (
-            <div className="absolute inset-0">
-              <RealScene />
-            </div>
+        </section>
+
+        <aside aria-label="Operational evidence and controls" className="flex w-full shrink-0 flex-col gap-3 overflow-y-auto border-t border-white/10 bg-[#09101b]/88 p-3 lg:w-[20rem] lg:border-l lg:border-t-0">
+          <DecisionStack frame={frame} realStatus={realStatus} realDataMode={realDataMode} />
+          {realDataMode ? (
+            <RealLayerControls />
+          ) : (
+            <>
+              <HUD hud={frame.hud} frameIndex={frameIndex} frameCount={DEMO_SEQUENCE.length} />
+              <SpeedGauge envelope={frame.speedEnvelope} />
+              <GovernorPanel frame={frame} />
+            </>
           )}
-        </div>
+        </aside>
+      </main>
 
-        <div className="w-72 shrink-0 border-l border-white/8 bg-black/20 p-3 overflow-y-auto flex flex-col gap-3">
-          <HUD hud={frame.hud} frameIndex={frameIndex} frameCount={DEMO_SEQUENCE.length} />
-          <SpeedGauge envelope={frame.speedEnvelope} />
-          <GovernorPanel frame={frame} />
-        </div>
-      </div>
+      <footer className="z-20 flex shrink-0 items-center gap-3 border-t border-white/10 bg-[#09101b]/95 px-3 py-2 backdrop-blur-xl sm:px-5">
+        {realDataMode ? <RealTimeline /> : <SyntheticControls frameCount={DEMO_SEQUENCE.length} />}
+        <EvidenceToggle />
+      </footer>
 
-      <div className="border-t border-white/8 bg-black/30 px-5 py-3 flex items-center gap-6">
-        <Timeline frameCount={DEMO_SEQUENCE.length} />
-        <div className="w-px h-6 bg-white/10" />
-        <GammaSlider />
-        <div className="w-px h-6 bg-white/10" />
-        <SplitScreenToggle />
-        <CompareWipeToggle />
-        <RealDataToggle />
-      </div>
+      <EvidenceDrawer demoFrame={frame} realStatus={realStatus} realDataMode={realDataMode} />
     </div>
   )
 }

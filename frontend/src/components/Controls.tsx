@@ -30,7 +30,7 @@ function IconButton({
       whileHover={{ scale: 1.06 }}
       whileTap={{ scale: 0.94 }}
       transition={{ duration: motionTokens.duration.fast, ease: motionTokens.easing.sharp }}
-      className={`h-9 w-9 flex items-center justify-center rounded-full border transition-colors ${
+      className={`h-11 w-11 flex shrink-0 items-center justify-center rounded-lg border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300 ${
         active ? "border-cyan-400/60 bg-cyan-400/10 text-cyan-300" : "border-white/10 bg-white/5 text-slate-300"
       }`}
     >
@@ -150,6 +150,70 @@ export function Timeline({ frameCount }: { frameCount: number }) {
   )
 }
 
+/** Playback for the locally exported RELLIS sequence. It deliberately
+ * uses its own Zustand state rather than the synthetic demo timeline:
+ * the exports have a different frame count and provenance. */
+export function RealTimeline() {
+  const frameIndex = useDashboardStore((s) => s.realFrameIndex)
+  const frameCount = useDashboardStore((s) => s.realFrameCount)
+  const isPlaying = useDashboardStore((s) => s.realIsPlaying)
+  const setFrameIndex = useDashboardStore((s) => s.setRealFrameIndex)
+  const stepFrame = useDashboardStore((s) => s.stepRealFrame)
+  const togglePlaying = useDashboardStore((s) => s.toggleRealPlaying)
+  const setPlaying = useDashboardStore((s) => s.setRealPlaying)
+  const rafRef = useRef<number | null>(null)
+  const lastTickRef = useRef(0)
+
+  useEffect(() => {
+    if (!isPlaying || frameCount < 2) return
+    const frameMs = 260
+    const tick = (time: number) => {
+      if (time - lastTickRef.current >= frameMs) {
+        stepFrame(1)
+        lastTickRef.current = time
+      }
+      rafRef.current = requestAnimationFrame(tick)
+    }
+    rafRef.current = requestAnimationFrame(tick)
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    }
+  }, [frameCount, isPlaying, stepFrame])
+
+  return (
+    <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
+      <span className="hidden whitespace-nowrap text-[10px] font-semibold uppercase tracking-[0.16em] text-cyan-300 sm:inline">RELLIS playback</span>
+      <IconButton onClick={() => stepFrame(-1)} label="Previous real export frame">
+        <StepIcon dir="back" />
+      </IconButton>
+      <IconButton onClick={togglePlaying} active={isPlaying} label={isPlaying ? "Pause real export playback" : "Play real export playback"}>
+        {isPlaying ? <PauseIcon /> : <PlayIcon />}
+      </IconButton>
+      <IconButton onClick={() => stepFrame(1)} label="Next real export frame">
+        <StepIcon dir="fwd" />
+      </IconButton>
+      <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
+        <input
+          aria-label="Real export frame"
+          type="range"
+          min={0}
+          max={Math.max(0, frameCount - 1)}
+          value={frameIndex}
+          disabled={frameCount === 0}
+          onChange={(e) => {
+            setPlaying(false)
+            setFrameIndex(Number(e.target.value))
+          }}
+          className="min-w-0 flex-1 accent-cyan-400 disabled:opacity-40"
+        />
+        <span className="w-14 text-right font-mono-tech text-xs tabular-nums text-slate-400">
+          {frameCount ? `${String(frameIndex + 1).padStart(2, "0")}/${frameCount}` : "--/--"}
+        </span>
+      </div>
+    </div>
+  )
+}
+
 export function GammaSlider() {
   const gamma = useDashboardStore((s) => s.gamma)
   const setGamma = useDashboardStore((s) => s.setGamma)
@@ -214,5 +278,22 @@ export function RealDataToggle() {
     >
       <RealDataIcon />
     </IconButton>
+  )
+}
+
+export function EvidenceToggle() {
+  const evidenceOpen = useDashboardStore((s) => s.evidenceOpen)
+  const toggleEvidence = useDashboardStore((s) => s.toggleEvidence)
+  return (
+    <button
+      type="button"
+      onClick={toggleEvidence}
+      aria-expanded={evidenceOpen}
+      className={`min-h-11 shrink-0 rounded-lg border px-3 text-[10px] font-semibold uppercase tracking-[0.13em] transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300 ${
+        evidenceOpen ? "border-cyan-300/45 bg-cyan-300/[0.12] text-cyan-100" : "border-white/10 bg-white/[0.035] text-slate-300 hover:border-white/25 hover:bg-white/[0.07]"
+      }`}
+    >
+      Evidence
+    </button>
   )
 }
