@@ -86,6 +86,46 @@ def test_training_smoke_run_two_epochs(tmp_path):
     assert (out_dir / "val_metrics_epoch1.json").exists()
 
 
+def test_warm_restarts_scheduler_and_swa_smoke_run(tmp_path):
+    """Bible Part G.30's new opt-in scheduler/SWA code paths, smoke-tested
+    on the same tiny synthetic sequence this file already uses for the
+    default OneCycleLR path -- catches a real runtime crash (e.g. the
+    SWA-phase branch never exercised, update_bn's loader-unpacking
+    assumption) before ever touching the real multi-hour GPU job."""
+    seq_dir = _make_fake_sequence(tmp_path)
+    out_dir = tmp_path / "checkpoints_warm_restarts_swa"
+
+    train(
+        sequence_dir=str(seq_dir),
+        sensor_config_path=str(CONFIGS / "sensor_hdl32e.yaml"),
+        out_dir=str(out_dir),
+        epochs=4,
+        batch_size=2,
+        num_workers=0,
+        device="cpu",
+        max_stats_frames=3,
+        scheduler_type="warm_restarts",
+        warm_restart_t0_epochs=2,
+        warm_restart_t_mult=2,
+        swa_epochs=2,
+        swa_lr=1e-5,
+    )
+
+    assert (out_dir / "checkpoint.pt").exists()
+    assert (out_dir / "swa_final.pt").exists()
+    log_lines = (out_dir / "training_log.jsonl").read_text().strip().split("\n")
+    entries = [json.loads(line) for line in log_lines]
+    # Regular per-epoch entries mark which ones ran during the SWA phase
+    # (epochs 2-3 of 4, given swa_epochs=2) -- and a final entry with
+    # "swa": True carries the averaged model's own real evaluation.
+    regular_entries = [e for e in entries if "swa" not in e]
+    assert len(regular_entries) == 4
+    assert [e["swa_phase"] for e in regular_entries] == [False, False, True, True]
+    swa_entries = [e for e in entries if e.get("swa") is True]
+    assert len(swa_entries) == 1
+    assert "val_miou" in swa_entries[0] and swa_entries[0]["val_miou"] is not None
+
+
 def test_resumes_correctly_from_a_killed_session(tmp_path):
     """Ticket #30's own explicit test: simulate a kill after epoch 0 by
     only running 1 epoch, then call train() again asking for 2 epochs --
