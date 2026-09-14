@@ -1,21 +1,36 @@
 import { AnimatePresence, motion } from "motion/react"
-import { useCallback, useState } from "react"
+import { lazy, Suspense, useCallback, useEffect, useState } from "react"
 import { CompareWipeToggle, EvidenceToggle, GammaSlider, RealTimeline, SplitScreenToggle, Timeline } from "./components/Controls"
-import { ComparisonWipe } from "./components/ComparisonWipe"
 import { DecisionStack } from "./components/DecisionStack"
 import { EvidenceDrawer } from "./components/EvidenceDrawer"
 import { GovernorPanel } from "./components/GovernorPanel"
 import { HUD } from "./components/HUD"
 import { RealLayerControls } from "./components/RealLayerControls"
-import { RealScene, type RealSceneStatus } from "./components/RealScene"
+import type { RealSceneStatus } from "./components/RealScene"
 import { RunStatusBar } from "./components/RunStatusBar"
 import { Scene } from "./components/Scene"
 import { SceneToolbar } from "./components/SceneToolbar"
 import { SpeedGauge } from "./components/SpeedGauge"
-import { SplitScreen } from "./components/SplitScreen"
 import { DEMO_SEQUENCE } from "./lib/mockData"
+import { preloadAllFrames } from "./lib/realData"
 import { motionTokens } from "./lib/theme"
 import { useDashboardStore } from "./state/store"
+
+// Code-split: RealScene/ComparisonWipe/SplitScreen are never all needed
+// on first paint (default view is plain synthetic Scene) -- each is its
+// own chunk, fetched only once its mode is actually selected, instead of
+// bundled unconditionally into the initial JS payload.
+const RealScene = lazy(() => import("./components/RealScene").then((m) => ({ default: m.RealScene })))
+const ComparisonWipe = lazy(() => import("./components/ComparisonWipe").then((m) => ({ default: m.ComparisonWipe })))
+const SplitScreen = lazy(() => import("./components/SplitScreen").then((m) => ({ default: m.SplitScreen })))
+
+function ScenePaneFallback() {
+  return (
+    <div className="absolute inset-0 flex items-center justify-center bg-[#07101a]">
+      <p className="font-mono-tech text-xs text-slate-400">Loading view…</p>
+    </div>
+  )
+}
 
 function SyntheticControls({ frameCount }: { frameCount: number }) {
   return (
@@ -46,6 +61,19 @@ export default function App() {
     setRealStatus(status)
   }, [])
 
+  // Warm the frame cache in the background once real-export mode is
+  // actually selected -- not on app start (that would compete with the
+  // initial synthetic-mode paint for bandwidth for a mode most sessions
+  // may never open), and not blocking: loadFrame's own in-memory cache
+  // (realData.ts) means later scrubbing hits this cache instead of the
+  // network, without this call gating anything on screen.
+  useEffect(() => {
+    if (!realDataMode) return
+    preloadAllFrames().catch(() => {
+      /* best-effort warmup; a real per-frame load still happens on demand */
+    })
+  }, [realDataMode])
+
   return (
     <div className="relative flex h-dvh w-screen flex-col overflow-hidden bg-[#07101a] text-slate-200">
       <a className="skip-link" href="#perception-map">Skip to perception map</a>
@@ -66,7 +94,9 @@ export default function App() {
                 exit={{ opacity: 0 }}
                 transition={{ duration: motionTokens.duration.fast }}
               >
-                <RealScene onStatusChange={handleRealStatus} />
+                <Suspense fallback={<ScenePaneFallback />}>
+                  <RealScene onStatusChange={handleRealStatus} />
+                </Suspense>
               </motion.div>
             ) : compareWipe ? (
               <motion.div
@@ -77,7 +107,9 @@ export default function App() {
                 exit={{ opacity: 0 }}
                 transition={{ duration: motionTokens.duration.fast }}
               >
-                <ComparisonWipe frame={frame} />
+                <Suspense fallback={<ScenePaneFallback />}>
+                  <ComparisonWipe frame={frame} />
+                </Suspense>
               </motion.div>
             ) : splitScreen ? (
               <motion.div
@@ -88,7 +120,9 @@ export default function App() {
                 exit={{ opacity: 0 }}
                 transition={{ duration: motionTokens.duration.fast }}
               >
-                <SplitScreen frame={frame} />
+                <Suspense fallback={<ScenePaneFallback />}>
+                  <SplitScreen frame={frame} />
+                </Suspense>
               </motion.div>
             ) : (
               <motion.div

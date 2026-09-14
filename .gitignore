@@ -4,6 +4,15 @@ __pycache__/
 eval/out/*
 !eval/out/*.png
 data/
+# `data/` above targets the RELLIS-3D dataset at the repo root
+# (data/rellis/...) -- gitignore patterns with no leading slash match a
+# directory of that name at ANY depth, so it was also silently excluding
+# frontend/public/data/, the exported real-data demo the frontend needs
+# to actually show anything. Un-ignore it explicitly (a directory-level
+# ignore blocks even the `!frontend/**/*.json` exception below from ever
+# taking effect, so this negation has to name the directory itself).
+!frontend/public/data/
+!frontend/public/data/**
 *.egg-info/
 .DS_Store
 *.zip

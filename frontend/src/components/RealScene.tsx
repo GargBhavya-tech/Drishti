@@ -10,7 +10,7 @@ import { Canvas, useThree } from "@react-three/fiber"
 import { useEffect, useState } from "react"
 import * as THREE from "three"
 import type { RealFrame, RealManifest } from "../lib/realData"
-import { loadFrame, loadManifest } from "../lib/realData"
+import { loadAccumulatedCells, loadFrame, loadManifest } from "../lib/realData"
 import { useDashboardStore } from "../state/store"
 import { DetectionMarkers } from "./DetectionMarkers"
 import { RealPointCloud } from "./RealPointCloud"
@@ -69,7 +69,18 @@ function RealLegend({ manifest, frameIndex, detectionCount }: { manifest: RealMa
 
 export function RealScene({ onStatusChange }: { onStatusChange?: (status: RealSceneStatus | null) => void }) {
   const [manifest, setManifest] = useState<RealManifest | null>(null)
+  // `frame` holds the LAST SUCCESSFULLY LOADED frame, which can lag
+  // behind `realFrameIndex` while the next one is still fetching --
+  // deliberately NOT cleared on every frame-index change (it used to
+  // be, which blanked the whole 3D view to a "Loading export frame N..."
+  // message every time playback's fixed-interval timer (RealTimeline,
+  // Controls.tsx) outran a frame's network fetch -- a real, reported
+  // "it takes time to load and see stuff" bug, not a one-off). The
+  // scene now keeps rendering whatever it last had while the next frame
+  // loads in the background, exactly like a video player holds its last
+  // decoded frame during a network stall instead of going black.
   const [frame, setFrame] = useState<RealFrame | null>(null)
+  const [isFetchingFrame, setIsFetchingFrame] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const realFrameIndex = useDashboardStore((s) => s.realFrameIndex)
   const realUseAccumulated = useDashboardStore((s) => s.realUseAccumulated)
@@ -98,31 +109,71 @@ export function RealScene({ onStatusChange }: { onStatusChange?: (status: RealSc
   useEffect(() => {
     if (!manifest) return
     let cancelled = false
+    setIsFetchingFrame(true)
     loadFrame(realFrameIndex)
       .then((loadedFrame) => {
-        if (!cancelled) setFrame(loadedFrame)
+        if (cancelled) return
+        setFrame(loadedFrame)
+        setIsFetchingFrame(false)
       })
       .catch(() => {
-        if (!cancelled) setError(`Could not load exported frame ${realFrameIndex + 1}.`)
+        if (cancelled) return
+        // A failed fetch only surfaces as a hard error when there is no
+        // prior frame to keep showing -- otherwise keep the last good
+        // frame on screen and just stop the (silent) fetching indicator,
+        // matching this effect's own "hold the last frame" design.
+        setIsFetchingFrame(false)
+        setFrame((prev) => {
+          if (!prev) setError(`Could not load exported frame ${realFrameIndex + 1}.`)
+          return prev
+        })
       })
     return () => {
       cancelled = true
     }
   }, [manifest, realFrameIndex])
 
+  // accumulatedCells is fetched lazily (realData.ts's own doc comment
+  // explains why: ~30% of a frame's payload, only needed once the user
+  // turns accumulation on). Merge it into `frame` once it arrives,
+  // guarded by frameIndex so a fetch that resolves after the user has
+  // already scrubbed to a different frame doesn't clobber it.
   useEffect(() => {
-    if (!manifest || !frame || frame.frameIndex !== realFrameIndex) {
+    if (!realUseAccumulated || !frame || frame.accumulatedCellCount > 0) return
+    const targetIndex = frame.frameIndex
+    let cancelled = false
+    loadAccumulatedCells(targetIndex).then((accumulatedCells) => {
+      if (cancelled) return
+      setFrame((prev) => (prev && prev.frameIndex === targetIndex ? { ...prev, accumulatedCells, accumulatedCellCount: accumulatedCells.length / 5 } : prev))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [realUseAccumulated, frame])
+
+  // Reports the LAST LOADED frame's status even while a newer one is
+  // still fetching -- `frameIndex` in the reported status is the frame
+  // actually being shown (frame.frameIndex), not necessarily
+  // `realFrameIndex`, so consumers (DecisionStack, RunStatusBar) stay in
+  // sync with what's genuinely on screen instead of flashing to a null/
+  // loading state on every playback tick.
+  useEffect(() => {
+    if (!manifest || !frame) {
       onStatusChange?.(null)
       return
     }
-    onStatusChange?.({ manifest, frame, frameIndex: realFrameIndex, useAccumulated: realUseAccumulated })
-  }, [frame, manifest, onStatusChange, realFrameIndex, realUseAccumulated])
+    onStatusChange?.({ manifest, frame, frameIndex: frame.frameIndex, useAccumulated: realUseAccumulated })
+  }, [frame, manifest, onStatusChange, realUseAccumulated])
 
   useEffect(() => () => onStatusChange?.(null), [onStatusChange])
 
   if (error) return <LoadingOverlay message={error} error />
   if (!manifest) return <LoadingOverlay message="Loading real-data manifest…" />
-  if (!frame || frame.frameIndex !== realFrameIndex) return <LoadingOverlay message={`Loading export frame ${realFrameIndex + 1}…`} />
+  // Only the very FIRST load (nothing has ever loaded yet) blanks the
+  // scene -- once any frame has loaded, later frame changes keep it on
+  // screen (see the frame-loading effect's own comment) rather than
+  // repeatedly blanking to this overlay.
+  if (!frame) return <LoadingOverlay message={`Loading export frame ${realFrameIndex + 1}…`} />
 
   return (
     <div className="relative h-full w-full">
@@ -151,9 +202,18 @@ export function RealScene({ onStatusChange }: { onStatusChange?: (status: RealSc
       </Canvas>
 
       <div className="pointer-events-none absolute left-3 top-3 flex max-w-[calc(100%-1.5rem)] flex-col gap-2 sm:max-w-sm">
-        <RealLegend manifest={manifest} frameIndex={realFrameIndex} detectionCount={frame.detectionCount} />
+        {/* frame.frameIndex, not realFrameIndex -- shows the frame actually
+            on screen, which can lag the scrubber position by one frame
+            while the next one fetches (see the frame-loading effect). */}
+        <RealLegend manifest={manifest} frameIndex={frame.frameIndex} detectionCount={frame.detectionCount} />
         <ResolutionLegend levels={manifest.levels} />
       </div>
+      {isFetchingFrame && (
+        <div className="pointer-events-none absolute right-3 bottom-3 flex items-center gap-1.5 rounded-md border border-white/10 bg-[#09101b]/80 px-2.5 py-1.5 font-mono-tech text-[10px] text-slate-400 backdrop-blur-md">
+          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-cyan-300" aria-hidden="true" />
+          Loading next frame…
+        </div>
+      )}
       <div className="pointer-events-none absolute bottom-3 left-3 rounded-md border border-white/10 bg-[#09101b]/75 px-2.5 py-1.5 font-mono-tech text-[10px] text-slate-400 backdrop-blur-md">
         Drag to orbit · scroll to zoom · camera presets above
       </div>

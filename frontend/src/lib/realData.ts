@@ -107,6 +107,14 @@ export function loadManifest(baseUrl: string = DEFAULT_BASE_URL): Promise<RealMa
 const _frameCache = new Map<number, RealFrame>()
 const _framePromises = new Map<number, Promise<RealFrame>>()
 
+/** `accumulatedCells` is NOT fetched here -- it's ~30% of a frame's
+ * payload (measured: ~0.93MB of a ~3MB frame) but only rendered when
+ * the user explicitly turns on "Temporal map memory" (off by default,
+ * `realUseAccumulated` in state/store.ts) -- fetching it unconditionally
+ * on every frame load would waste bandwidth for the common case. It
+ * starts as an empty placeholder here; call `loadAccumulatedCells`
+ * separately (RealScene.tsx does, only once accumulation is toggled on)
+ * to fetch and merge it in. */
 export function loadFrame(index: number, baseUrl: string = DEFAULT_BASE_URL): Promise<RealFrame> {
   const cached = _frameCache.get(index)
   if (cached) return Promise.resolve(cached)
@@ -117,20 +125,19 @@ export function loadFrame(index: number, baseUrl: string = DEFAULT_BASE_URL): Pr
   const promise = Promise.all([
     fetch(`${baseUrl}/points_${idx}.bin`).then((r) => r.arrayBuffer()),
     fetch(`${baseUrl}/cells_${idx}.bin`).then((r) => r.arrayBuffer()),
-    _fetchOptionalBinary(`${baseUrl}/accumulated_cells_${idx}.bin`),
     _fetchOptionalBinary(`${baseUrl}/detections_${idx}.bin`),
-  ]).then(([pointsBuf, cellsBuf, accumulatedCells, detections]) => {
+  ]).then(([pointsBuf, cellsBuf, detections]) => {
     const points = new Float32Array(pointsBuf)
     const cells = new Float32Array(cellsBuf)
     const frame: RealFrame = {
       frameIndex: index,
       points,
       cells,
-      accumulatedCells,
+      accumulatedCells: new Float32Array(0),
       detections,
       pointCount: points.length / 4,
       cellCount: cells.length / 5,
-      accumulatedCellCount: accumulatedCells.length / 5,
+      accumulatedCellCount: 0,
       detectionCount: detections.length / 6,
     }
     _frameCache.set(index, frame)
@@ -141,10 +148,34 @@ export function loadFrame(index: number, baseUrl: string = DEFAULT_BASE_URL): Pr
   return promise
 }
 
-/** Kicks off a fetch for every frame in the manifest without waiting --
- * call once on mount so scrubbing the timeline doesn't stall on
- * network. Individual `loadFrame` calls elsewhere share the same
- * cache/in-flight-promise map, so this never double-fetches. */
+const _accCache = new Map<number, Float32Array>()
+const _accPromises = new Map<number, Promise<Float32Array>>()
+
+/** Fetches (and caches) ONE frame's accumulated-cells layer on demand --
+ * call this only once accumulation is actually turned on, not from
+ * `loadFrame` itself (see that function's own doc comment for why). */
+export function loadAccumulatedCells(index: number, baseUrl: string = DEFAULT_BASE_URL): Promise<Float32Array> {
+  const cached = _accCache.get(index)
+  if (cached) return Promise.resolve(cached)
+  const pending = _accPromises.get(index)
+  if (pending) return pending
+
+  const idx = String(index).padStart(3, "0")
+  const promise = _fetchOptionalBinary(`${baseUrl}/accumulated_cells_${idx}.bin`).then((data) => {
+    _accCache.set(index, data)
+    _accPromises.delete(index)
+    return data
+  })
+  _accPromises.set(index, promise)
+  return promise
+}
+
+/** Kicks off a fetch for every frame's REQUIRED layers (points/cells/
+ * detections -- not accumulatedCells, deliberately, see loadFrame's own
+ * doc comment) without waiting -- call once real-export mode is
+ * selected so scrubbing the timeline doesn't stall on network.
+ * Individual `loadFrame` calls elsewhere share the same cache/in-flight-
+ * promise map, so this never double-fetches. */
 export async function preloadAllFrames(baseUrl: string = DEFAULT_BASE_URL): Promise<void> {
   const manifest = await loadManifest(baseUrl)
   await Promise.all(Array.from({ length: manifest.nFrames }, (_, i) => loadFrame(i, baseUrl)))

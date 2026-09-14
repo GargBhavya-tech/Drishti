@@ -1,0 +1,12 @@
+# Netlify / Cloudflare Pages header rules. The exported RELLIS-3D run
+# (points_*.bin, cells_*.bin, accumulated_cells_*.bin, detections_*.bin)
+# is a static, immutable dataset for a given deploy -- long-lived caching
+# is safe. manifest.json is versioned with the SAME deploy (it names the
+# checkpoint/frame set that generated the .bin files next to it), so it
+# gets the same treatment; a NEW export always ships as a NEW deploy
+# with a fresh URL/cache generation, not a same-URL content swap.
+/data/*.bin
+  Cache-Control: public, max-age=31536000, immutable
+
+/data/manifest.json
+  Cache-Control: public, max-age=31536000, immutable
