@@ -25,7 +25,7 @@ from sensor.sensor_model import SensorConfig
 
 @dataclass(frozen=True)
 class RangeImage:
-    x: np.ndarray  # (H, W) float64
+    x: np.ndarray  # (H, W) float32
     y: np.ndarray
     z: np.ndarray
     range: np.ndarray
@@ -62,6 +62,21 @@ def project_to_range_image(sweep: Sweep, sm: SensorConfig, W: int | None = None)
     if W is None:
         W = int(round(2 * np.pi / sm.d_theta_rad))
 
+    # PIXEL-ASSIGNMENT MATH STAYS float64 -- do not "optimize" this part.
+    # A real equivalence check (scratchpad/check_float32_equivalence.py,
+    # this session) caught a genuine correctness bug when this was first
+    # tried at float32: RELLIS-3D ships no real `ring` field (ring=-1
+    # throughout -- see this function's own docstring), so elevation row
+    # `v` falls back to the arcsin(z/r) formula for essentially every
+    # point, and that formula is precision-sensitive enough that
+    # downcasting z/r to float32 BEFORE it runs measurably shifted which
+    # (row, col) bin ~300-480 of 131072 points landed in per frame (not a
+    # rounding-tolerance nitpick -- point_index differed outright, i.e. a
+    # DIFFERENT real point occupies that pixel). u/v/lexsort tie-breaking
+    # decide WHICH point wins a many-to-one collision -- that decision
+    # must stay float64-precise; only the OUTPUT (H,W) arrays actually
+    # need to be memory-bandwidth-cheap (Bible Part G.28's real perf
+    # target), so only THEY are downcast, below.
     xyz = sweep.xyz.astype(np.float64)
     x, y, z = xyz[:, 0], xyz[:, 1], xyz[:, 2]
     r = np.sqrt(x * x + y * y + z * z)
@@ -88,15 +103,15 @@ def project_to_range_image(sweep: Sweep, sm: SensorConfig, W: int | None = None)
     valid_point = real_point & v_in_range
     v = np.clip(v, 0, H - 1)
 
-    H_out = np.zeros((H, W), dtype=np.float64)
-    x_img = np.zeros((H, W), dtype=np.float64)
-    y_img = np.zeros((H, W), dtype=np.float64)
-    z_img = np.zeros((H, W), dtype=np.float64)
-    range_img = np.zeros((H, W), dtype=np.float64)
-    intensity_img = np.zeros((H, W), dtype=np.float64)
+    H_out = np.zeros((H, W), dtype=np.float32)
+    x_img = np.zeros((H, W), dtype=np.float32)
+    y_img = np.zeros((H, W), dtype=np.float32)
+    z_img = np.zeros((H, W), dtype=np.float32)
+    range_img = np.zeros((H, W), dtype=np.float32)
+    intensity_img = np.zeros((H, W), dtype=np.float32)
     valid_mask = np.zeros((H, W), dtype=bool)
     occlusion_count = np.zeros((H, W), dtype=np.int64)
-    occlusion_spread = np.zeros((H, W), dtype=np.float64)
+    occlusion_spread = np.zeros((H, W), dtype=np.float32)
     point_index = np.full((H, W), -1, dtype=np.int64)
 
     idx = np.nonzero(valid_point)[0]
