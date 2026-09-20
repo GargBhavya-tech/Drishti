@@ -1,0 +1,24 @@
+flowchart LR
+    subgraph DATA["Real datasets"]
+        RL["RELLIS-3D<br/>5 sequences, off-road"]
+        PO["SemanticPOSS<br/>campus"]
+        NU["nuScenes-mini<br/>urban"]
+    end
+    TX["Taxonomy remap<br/>dataset labels to 10 classes"]
+    PRE["Projection, ground prior,<br/>normals, range-corrected intensity"]
+    CACHE[("Frame cache<br/>raw channels on disk")]
+    AUG["Augmentation<br/>CutMix, copy-paste,<br/>beam dropout, jitter"]
+    TR["Training<br/>AdamW, OneCycleLR, AMP,<br/>Lovasz + CE + confusion-aware"]
+    CK[("best.pt<br/>mIoU 0.619")]
+    EV["Eval harness<br/>mIoU, per-distance recall,<br/>latency, drift check"]
+    RL --> TX
+    PO --> TX
+    NU --> TX
+    TX --> PRE --> CACHE --> AUG --> TR --> CK --> EV
+    EV -. "drift re-measured against training log" .-> TR
+    classDef d fill:#1b2a41,stroke:#4fa8ff,color:#e8f1ff
+    classDef p fill:#2a1f45,stroke:#a78bfa,color:#f0eaff
+    classDef o fill:#173a2b,stroke:#34d399,color:#e6fff3
+    class RL,PO,NU d
+    class TX,PRE,CACHE,AUG,TR p
+    class CK,EV o

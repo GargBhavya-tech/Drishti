@@ -1,0 +1,13 @@
+flowchart LR
+    I["Input 13 x 64 x 2048"] --> E["EfficientNet-B0 encoder<br/>stem widened 9 to 13 channels"]
+    E --> A["ASPP bottleneck<br/>multi-scale, circular padding"]
+    A --> D["Attention U-Net decoder<br/>SE block on every skip"]
+    D --> H["Segmentation head<br/>10 classes"]
+    D --> X["Aux head at 1/8 res<br/>deep supervision"]
+    LOSS["Lovasz-Softmax + weighted CE<br/>+ confusion-aware loss"] -. "trains" .-> H
+    classDef io fill:#1b2a41,stroke:#4fa8ff,color:#e8f1ff
+    classDef blk fill:#2a1f45,stroke:#a78bfa,color:#f0eaff
+    classDef out fill:#173a2b,stroke:#34d399,color:#e6fff3
+    class I io
+    class E,A,D blk
+    class H,X,LOSS out

@@ -1,0 +1,70 @@
+flowchart TD
+    IN["LiDAR sweep + ego pose<br/>~130k points, 10 Hz"]
+
+    subgraph L0["Layer 0 - Sensor model"]
+        SM["Beam geometry<br/>resolution schedule, hazard spec sheet,<br/>expected-return curves"]
+    end
+
+    subgraph PERC["Layers 1-3 - Perception (polar, sensor-native)"]
+        ING["Deskew, ego-compensate,<br/>spherical projection"]
+        TEN["13-channel range-image tensor<br/>xyz, range, corrected intensity,<br/>normals, curvature, ground prior"]
+        NET["FusionSegNet - 5.82M params<br/>EfficientNet-B0 + ASPP + Attention U-Net"]
+        TAX["10-class defence-UGV taxonomy"]
+        ING --> TEN --> NET --> TAX
+    end
+
+    subgraph MAP["Layers 4-5 - 2.5D map (Cartesian, world-anchored)"]
+        CLIP["Foveated clipmap<br/>power-of-two levels, toroidal"]
+        CELL["Multi-layer cells<br/>ground / gap / ceiling height"]
+        CLIP --> CELL
+    end
+
+    subgraph GEO["Layers 6-7 - Geometry-derived hazards"]
+        OBS["Ray-cast observability<br/>FREE / OCCUPIED / OCCLUDED / UNKNOWN"]
+        NEG["Negative-obstacle detection<br/>range shadow"]
+        SPA["Sparsity Trap<br/>expected vs observed returns"]
+    end
+
+    subgraph TIME["Layer 8-9 - Time and attention"]
+        TF["Temporal fusion<br/>static accumulation + Kalman tracker"]
+        FOV["Adaptive fovea<br/>resolution follows time-to-contact"]
+    end
+
+    subgraph PLAN["Layers 10-11 - Planning"]
+        COST["Traversability cost map"]
+        AST["A* planner + kinodynamic smoothing"]
+        SPD["Perception-limited speed envelope<br/>+ friction governor"]
+        COST --> AST --> SPD
+    end
+
+    INV{{"Conservatism Invariant<br/>information loss never lowers cost"}}
+
+    IN --> SM
+    IN --> ING
+    SM -. "derives" .-> CLIP
+    TAX --> CELL
+    CELL --> OBS --> NEG
+    OBS --> SPA
+    CELL --> TF
+    TF --> FOV
+    FOV -. "refine only, never coarsen" .-> CLIP
+    NEG --> COST
+    SPA --> COST
+    TF --> COST
+    INV -. "applies across every layer" .-> COST
+    SPD --> OUT["Planner interface<br/>cost map + safe speed"]
+
+    classDef sensor fill:#1b2a41,stroke:#4fa8ff,color:#e8f1ff
+    classDef net fill:#2a1f45,stroke:#a78bfa,color:#f0eaff
+    classDef map fill:#12384a,stroke:#22d3ee,color:#e0fbff
+    classDef geo fill:#4a2a12,stroke:#fb923c,color:#fff1e6
+    classDef time fill:#173a2b,stroke:#34d399,color:#e6fff3
+    classDef plan fill:#4a1a2a,stroke:#f472b6,color:#ffe8f1
+    classDef inv fill:#3a3a10,stroke:#facc15,color:#fffbe0
+    class IN,SM sensor
+    class ING,TEN,NET,TAX net
+    class CLIP,CELL map
+    class OBS,NEG,SPA geo
+    class TF,FOV time
+    class COST,AST,SPD,OUT plan
+    class INV inv

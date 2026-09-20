@@ -1,0 +1,9 @@
+flowchart TD
+    Q["Cell at range r<br/>N_obs returns vs N_exp expected<br/>for the smallest object of concern"]
+    Q --> K{"N_obs >= N_exp ?"}
+    K -- "yes" --> N["NORMAL - full confidence"]
+    K -- "no" --> Z{"N_obs > 0 ?"}
+    Z -- "yes" --> SP["SPARSE_STRUCTURED<br/>low confidence, never free"]
+    Z -- "no" --> E{"N_exp >= 1 ?"}
+    E -- "yes" --> FR["FREE<br/>sensor would have seen it"]
+    E -- "no" --> UN["UNKNOWN<br/>absence proves nothing"]

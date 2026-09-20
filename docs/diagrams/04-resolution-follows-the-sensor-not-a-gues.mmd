@@ -1,0 +1,10 @@
+flowchart LR
+    G["Beam geometry<br/>d_theta, d_phi, mount height"] --> S["c(r) = c0 * 2^ceil(log2(r*d_theta / c0))"]
+    S --> L0["L0: 5 cm<br/>to ~16 m"]
+    S --> L1["L1: 10 cm"]
+    S --> L2["L2: 20 cm"]
+    S --> L3["L3: 40 cm<br/>by 100 m"]
+    L0 --> M["12.6 MB total<br/>16x smaller than uniform 5 cm"]
+    L1 --> M
+    L2 --> M
+    L3 --> M

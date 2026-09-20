@@ -1,0 +1,32 @@
+flowchart TD
+    CFG["configs/<br/>sensor_*.yaml, vehicle_ugv.yaml"]
+    SEN["sensor/<br/>SensorModel, schedule, calibration"]
+    PER["perception/<br/>loaders, range image, FusionSegNet,<br/>losses, training, taxonomy"]
+    GRD["grid/<br/>clipmap, cells, scatter"]
+    OBS["observability/<br/>ray-cast, negative obstacles,<br/>Sparsity Trap"]
+    TMP["temporal/<br/>accumulation, Kalman tracker"]
+    ATT["attention/<br/>TTC fovea"]
+    PLN["planning/<br/>cost map, A*, speed envelope,<br/>conservatism"]
+    EVL["eval/<br/>benchmarks, figures, export"]
+    TST["tests/<br/>380+ tests"]
+    STY["story/<br/>Svelte + Threlte demo"]
+    CFG --> SEN
+    SEN --> PER
+    SEN --> GRD
+    PER --> GRD
+    GRD --> OBS
+    GRD --> TMP
+    TMP --> ATT
+    ATT --> GRD
+    OBS --> PLN
+    TMP --> PLN
+    PER --> EVL
+    PLN --> EVL
+    EVL -. "exports real frames" .-> STY
+    TST -. "covers every module" .-> PLN
+    classDef c fill:#3a3a10,stroke:#facc15,color:#fffbe0
+    classDef m fill:#12384a,stroke:#22d3ee,color:#e0fbff
+    classDef v fill:#4a1a2a,stroke:#f472b6,color:#ffe8f1
+    class CFG,TST c
+    class SEN,PER,GRD,OBS,TMP,ATT,PLN,EVL m
+    class STY v

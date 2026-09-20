@@ -1,0 +1,15 @@
+sequenceDiagram
+    participant S as LiDAR
+    participant P as Perception
+    participant M as 2.5D map
+    participant G as Geometry hazards
+    participant C as Cost map and planner
+    participant V as Vehicle
+    S->>P: sweep at 10 Hz
+    P->>M: classified points into height-range cells
+    M->>G: ray-cast, expected vs observed returns
+    G->>C: hazard cells (NEGATIVE_OBSTACLE, UNKNOWN)
+    P->>C: PEDESTRIAN / VEHICLE tracks
+    C->>V: A* path around hazards
+    C->>V: safe speed = f(detection range, braking)
+    Note over G,C: Conservatism Invariant - losing information never lowers cost

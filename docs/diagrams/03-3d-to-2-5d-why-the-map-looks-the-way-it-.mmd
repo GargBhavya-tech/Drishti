@@ -1,0 +1,8 @@
+flowchart LR
+    A["Raw 3D points<br/>accurate, unusable<br/>too much data"] -->|"too heavy to store"| X1(("x"))
+    B["Flat 2D occupancy<br/>cheap, throws away height<br/>kerb, ditch, branch vanish"] -->|"forgets height"| X2(("x"))
+    C["DRISHTI 2.5D clipmap<br/>fine near, coarse far<br/>height range per cell"] --> D["Drivable under a bridge,<br/>ditch flagged, branch seen"]
+    style X1 fill:#3a1a1a,stroke:#a33
+    style X2 fill:#3a1a1a,stroke:#a33
+    style C fill:#12324a,stroke:#4fa8ff
+    style D fill:#12402a,stroke:#3c9

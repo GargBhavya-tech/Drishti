@@ -1,125 +1,400 @@
+<div align="center">
+
 # DRISHTI
 
-Adaptive variable-resolution 2.5D LiDAR mapping for dynamic environment perception.
-SIH 2026 — DRDO Problem Statement 26053. Team Phir Hera Pheri.
+**Distance-Resolved Instantaneous Semantic Height & Traversability Imaging**
 
-This repo is a companion to `DRISHTI_Project_Bible_v3.md` (why) and
-`DRISHTI_Build_Map.md` (what, in ticket order). Read those first — this
-README only orients you inside the code.
+*Adaptive variable-resolution 2.5D LiDAR mapping for autonomous off-road ground vehicles*
 
-## Status
+**Smart India Hackathon 2026 · DRDO Problem Statement 26053 · Team Phir Hera Pheri**
 
-**Phase 0 (Tickets #1–#9) is complete.** See `DRISHTI_Build_Map.md` for what each ticket covers.
+</div>
 
-| Ticket | What | Where |
+---
+
+## Overview
+
+A LiDAR gives a vehicle a million 3D points a second: too much to store, and too rich to flatten into a plain 2D occupancy grid that forgets height. DRISHTI folds the point cloud into a **2.5D map whose resolution follows the sensor's own physics**: fine (5 cm) close to the vehicle, coarser with range, with every cell remembering a *height range* instead of a single value. On top of that map it detects negative obstacles (ditches) from the *absence* of returns, classifies terrain and objects with a compact neural network, tracks moving people and vehicles, plans around hazards, and computes the fastest speed the sensor can safely support, all from LiDAR alone.
+
+The system answers seven questions, in order, before handing anything to a planner:
+
+1. What is physically knowable here, given the sensor's beam geometry at this range?
+2. What is each point, and is it moving?
+3. Where should detail live: how big should a cell be, and why?
+4. What does a cell contain: not "how tall", but the vertical story (ground, gap, ceiling, confidence)?
+5. What did we fail to see, since a hole in the ground is defined by returns that never came back?
+6. When does "no returns" stop meaning "nothing there"?
+7. How fast may the vehicle go, given all of the above?
+
+## Features
+
+| Capability | Description |
+|---|---|
+| Sensor-derived variable resolution | Cell size follows beam geometry: 5 cm near, 40 cm by 100 m; regenerates from a sensor config file |
+| Multi-layer 2.5D cells | Ground, gap and ceiling height per cell; represents overhangs and roads under bridges |
+| Semantic segmentation | 5.82M-parameter range-image network, 10-class defence-UGV taxonomy |
+| Negative-obstacle detection | Range-shadow physics on the map's own geometry; never a predicted class |
+| Sparsity Trap | Expected-versus-observed return counts; reports UNKNOWN, never FREE, where absence is uninformative |
+| Temporal fusion | Static accumulation plus a Kalman entity tracker; moving objects are tracked, never smeared into the grid |
+| Adaptive fovea | Resolution follows time-to-contact; can only refine, never coarsen past the sensor floor |
+| Planning interface | Traversability cost map, A* with kinodynamic smoothing, friction-aware speed envelope |
+| Conservatism Invariant | Information loss can never lower reported cost; property-tested |
+| Story demo | Scroll-driven 3D walkthrough on real exported data |
+
+---
+
+## Problem statement (SIH 2026 · DRDO · PS 26053)
+
+The PS asks for a LiDAR mapping system for autonomous ground vehicles that converts 3D point clouds into a **2.5D elevation map with adaptive, variable resolution**, detects and classifies obstacles (walls, poles, overhangs, negative obstacles), and does so with **low latency and low memory** while staying accurate across distance.
+
+| PS requirement | What DRISHTI delivers |
+|---|---|
+| Variable resolution: ~5 cm near, ~50 cm at 100 m | Resolution schedule **derived from beam geometry**: **5 cm out to ~16 m, 40 cm by 100 m** on a real Ouster OS1-64 — finer than requested near the vehicle *and* far away |
+| 3D → 2.5D conversion | Foveated, world-anchored **clipmap** of multi-layer cells (ground / gap / ceiling height per cell) |
+| Identify & classify obstacles (walls, poles, …) | 10-class defence-UGV taxonomy; **STATIC_OBSTACLE 0.53 IoU**, VEHICLE 0.78, PEDESTRIAN 0.80 on real off-road data |
+| Negative obstacles / overhangs | Detected from **geometry** (range shadow + expected-return physics), never hallucinated by the network |
+| Accuracy across varying distances | Per-class, per-distance-band accuracy table (below) |
+| Low latency / high FPS | **9.4 FPS end-to-end (106 ms)** on a single GPU, up from 4.2 FPS after profiling and optimization |
+| Significant memory reduction | **16×** smaller than a dense uniform 2.5D grid (12.6 MB vs 201 MB) |
+
+---
+
+## Why this is different — four claims
+
+1. **One height per cell cannot represent an overhang.** "Drivable road under a bridge" is wrong under max-, min-, *and* mean-height. Multi-layer cells fix it structurally.
+2. **The resolution numbers aren't arbitrary — they're the sensor's sampling limit.** Four lines of beam geometry give the whole schedule; change the sensor config and the map, memory budget and thresholds all move consistently.
+3. **"No returns" is not "no obstacle" — and the boundary is computable.** The *Sparsity Trap* computes the expected return count for the smallest object of concern at every range and reports `UNKNOWN`, never `FREE`, where absence stops being informative.
+4. **The sensor, not the vehicle, is the speed limit.** Detection range + stopping distance give a closed-form perception-limited speed envelope, turning a sensor recommendation into a costed trade-off.
+
+A fifth property ties them together: the **Conservatism Invariant** — degrading information can never *lower* reported cost. It is property-tested over 10,000 generated cases and fault-injection-tested on real degraded LiDAR (**0 violations in 1,500 real cells**).
+
+---
+
+## Architecture
+
+### End-to-end pipeline
+
+![End-to-end pipeline](docs/diagrams/01-end-to-end-pipeline.png)
+
+
+### Main design points
+
+![Main design points](docs/diagrams/02-main-design-points.png)
+
+
+### 3D to 2.5D: why the map looks the way it does
+
+![3D to 2.5D: why the map looks the way it does](docs/diagrams/03-3d-to-2-5d-why-the-map-looks-the-way-it-.png)
+
+
+### Resolution follows the sensor, not a guess
+
+![Resolution follows the sensor, not a guess](docs/diagrams/04-resolution-follows-the-sensor-not-a-gues.png)
+
+
+### Sparsity Trap decision logic
+
+![Sparsity Trap decision logic](docs/diagrams/05-sparsity-trap-decision-logic.png)
+
+
+### From detection to speed
+
+![From detection to speed](docs/diagrams/06-from-detection-to-speed.png)
+
+
+### Model architecture
+
+![Model architecture](docs/diagrams/07-model-architecture.png)
+
+
+### Class taxonomy — what the planner sees
+
+![Class taxonomy — what the planner sees](docs/diagrams/08-class-taxonomy-what-the-planner-sees.png)
+
+
+### Adaptive fovea — resolution can only get finer
+
+![Adaptive fovea — resolution can only get finer](docs/diagrams/09-adaptive-fovea-resolution-can-only-get-f.png)
+
+
+### Data and training pipeline
+
+![Data and training pipeline](docs/diagrams/10-data-and-training-pipeline.png)
+
+
+### Codebase map
+
+![Codebase map](docs/diagrams/11-codebase-map.png)
+
+
+### Story demo architecture
+
+![Story demo architecture](docs/diagrams/12-story-demo-architecture.png)
+
+
+---
+
+## Tech Stack
+
+| Area | Technology |
+|---|---|
+| Language and testing | Python, pytest, Hypothesis (property-based tests) |
+| Deep learning | PyTorch, EfficientNet-B0 backbone, FP16 autocast, Lovasz-Softmax loss |
+| Geometry and tracking | NumPy, SciPy (Kalman filter, Hungarian association, KD-tree), Numba JIT for the ground prior |
+| Sensor and datasets | Ouster OS1-64 (RELLIS-3D), Hesai Pandar40P (SemanticPOSS), Velodyne HDL-32E (nuScenes) |
+| Story demo | SvelteKit, Svelte 5, Threlte, Three.js, GLSL point-sprite shaders |
+| Earlier dashboard | React, react-three-fiber, Zustand |
+| Diagrams | Mermaid, rendered to SVG in `docs/diagrams/` |
+
+---
+
+## Deep Dive: The Layers
+
+### Layer 0: the sensor model
+
+Every number starts from four beam-geometry quantities: azimuth step Δθ, elevation step Δφ, maximum elevation φ_max and mount height h. Spacing between neighbouring returns:
+
+$$s_t(r) = r\,\Delta\theta \qquad s_r(r) \approx \frac{r^2\,\Delta\phi}{h} \qquad s_v(r) = r\,\Delta\phi$$
+
+The resolution schedule is quantized onto power-of-two levels so that a coarse cell covers exactly four finer cells:
+
+$$c(r) = c_0 \cdot 2^{\lceil \log_2 (r\Delta\theta / c_0) \rceil}, \qquad c_0 = 5\ \text{cm}$$
+
+### Layers 4-5: the clipmap and multi-layer cells
+
+Levels share one world origin, so a level-(l+1) cell covers exactly four level-l cells and alignment error is structurally impossible. Storage is toroidal: with N a power of two, the storage index is `i & (N-1)`, so ego motion is an index shift, not a copy. Each cell keeps a ground layer, a gap, and an optional ceiling layer, giving `clearance = z_ceiling_min - z_ground_max`. Statistics accumulate exactly with the Chan merge:
+
+$$n = n_A + n_B,\quad \delta = \mu_B - \mu_A,\quad \mu = \mu_A + \delta\,\frac{n_B}{n},\quad M_2 = M_{2,A} + M_{2,B} + \delta^2\,\frac{n_A n_B}{n}$$
+
+### Layer 6: negative obstacles
+
+When the ground drops by depth d, a beam at expected range r_exp travels further; the range shadow is
+
+$$\Delta = \frac{r_{exp}\, d}{h}$$
+
+Detection is judged by ring-to-ring inconsistency against a locally fitted ground plane, with three-scan temporal confirmation, so crests and slopes do not raise false alarms.
+
+### Layer 7: the Sparsity Trap
+
+An object of extent t by w at range r should return
+
+$$N_{exp}(r; t, w) = \frac{t\,w}{r^2\,\Delta\phi\,\Delta\theta}, \qquad r_{blind} = \sqrt{\frac{t\,w}{\Delta\phi\,\Delta\theta}}$$
+
+With κ = N_obs / N_exp: κ >= 1 is normal; 0 < κ < 1 is SPARSE_STRUCTURED (low confidence, not free); N_obs = 0 with N_exp >= 1 is FREE (the sensor would have seen it); N_obs = 0 with N_exp < 1 is UNKNOWN. The thresholds come from the vehicle's own stated safety requirement, not from a fit.
+
+### Layer 9: the adaptive fovea
+
+Resolution follows time-to-contact rather than raw range:
+
+$$\text{TTC}(p) = \frac{\lVert p\rVert}{\max(v_{close}(p),\, v_{min})}, \qquad c_{ttc}(p) = c_0\left(\frac{\text{TTC}(p)}{\tau_0}\right)^{\gamma}, \qquad c(p) = \min\big(c_{range},\, c_{ttc},\, c_{boundary}\big)$$
+
+Taking the minimum means every extra term can only make a cell finer; the sensor-derived schedule is a hard floor.
+
+### Layer 11: the perception-limited speed envelope
+
+Stopping distance is d_stop = v·t_react + v² / (2a). Setting d_stop equal to the detection range R:
+
+$$v_{max}(R) = -a\,t_{react} + \sqrt{a^2 t_{react}^2 + 2aR}$$
+
+The vehicle's safe speed is set by the shortest detection range among the hazards the terrain can plausibly contain.
+
+### The Conservatism Invariant
+
+$$\text{cost(FREE)} \le \text{cost(known rough)} \le \text{cost(UNKNOWN)} \le \text{LETHAL}, \qquad E' \sqsubseteq E \;\Rightarrow\; \text{cost}(E') \ge \text{cost}(E)$$
+
+Fourteen distinct information-deficit paths (never observed, occluded, sparse, provisional, stale, and so on) all resolve in the same cautious direction. A merge-with-prior step guarantees a fresh single-frame classification can never silently overwrite a confirmed hazard.
+
+---
+
+## Benchmarks
+
+All results are measured on **RELLIS-3D** (Texas A&M off-road proving ground, Ouster OS1-64) using **all 5 sequences (00000–00004 — the complete dataset)**, 11,522 train / 2,034 validation frames, unless stated otherwise.
+
+### Segmentation accuracy — `checkpoints_multi_v5`
+
+| Metric | Value |
+|---|---|
+| **Overall mIoU** | **0.619** |
+| STATIC_OBSTACLE (walls, poles, fences, logs) | **0.529** |
+| VEHICLE | **0.783** |
+| PEDESTRIAN | **0.798** |
+| Re-measurement vs. training log (drift check, full val set) | identical to 4 decimals |
+
+### How it compares
+
+| Network | Parameters | Input | Published mIoU (SemanticKITTI) |
+|---|---|---|---|
+| SalsaNext | 6.7 M | 64×2048 range image | 55.5 % |
+| FIDNet | 6.0 M | 64×2048 range image | 55.4 % |
+| CENet | 6.8 M | 64×2048 range image | up to 64.7 % |
+| **DRISHTI FusionSegNet** | **5.82 M — smallest** | 64×2048 range image | **61.9 % on RELLIS-3D** |
+
+DRISHTI is the **smallest model in its class** while landing in the same mIoU band — on RELLIS-3D, an *unstructured* off-road dataset with heavy vegetation occlusion that is qualitatively harder than urban driving benchmarks. (The two datasets differ, so this is a like-for-like size and capability comparison, not a leaderboard ranking.)
+
+### Accuracy across distance — per-class recall (150 real validation frames)
+
+| Class | 0–10 m | 10–20 m | 20–30 m | 30–50 m |
+|---|---|---|---|---|
+| DRIVABLE | 77.4 % | 94.2 % | 98.2 % | 96.5 % |
+| VEGETATION | 97.1 % | 98.1 % | 98.3 % | 97.8 % |
+| VEHICLE | — | 89.7 % | 93.2 % | — |
+| PEDESTRIAN | 89.0 % | 83.2 % | 75.9 % | 82.7 % |
+
+### Latency — single-GPU, per real frame, 200-frame benchmark
+
+| Stage | Before | After |
 |---|---|---|
-| #1 | Repo skeleton, Colab environment | this layout, `colab_setup.ipynb` |
-| #2 | nuScenes-mini loader → canonical `Sweep` | `perception/nuscenes_loader.py` |
-| #3 | RELLIS-3D loader + background download script | `perception/rellis_loader.py`, `scripts/download_rellis.sh` |
-| #4 | `SensorModel` — the seven formulas | `sensor/sensor_model.py`, `configs/sensor_*.yaml` |
-| #5 | Resolution schedule generator | `sensor/schedule.py` |
-| #6 | 🚨 THE GATE — point-distribution validation | `eval/point_distribution.py` |
-| #7 | Verify mount height from calibration | `sensor/calibration.py` |
-| #8 | Taxonomy remap | `perception/taxonomy.py` |
-| #9 | Vehicle config | `configs/vehicle_ugv.yaml`, `sensor/vehicle_config.py` |
+| Ground prior (Numba JIT, bit-exact vs. reference) | 117.2 ms | **25.8 ms** (4.5×) |
+| Range-image tensor assembly | 24.9 ms | **11.8 ms** |
+| Network forward pass (FP16 autocast, 99.90 % argmax agreement) | 50.5 ms | **23.9 ms** (2.1×) |
+| **End-to-end** | **239 ms (4.2 FPS)** | **106 ms (9.4 FPS)** |
 
-**#6/#7 status, updated 2026-09-11:** RELLIS-3D (Ouster OS1-64) is now downloaded locally, and the gate (`eval/point_distribution.py`) has been run against it for real — see `eval/measure_ouster_config.py`, which measures `d_theta`/`d_phi`/`phi_max`/`h_m` from real data (not synthetic) and writes the result into `configs/sensor_ouster_os1_64.yaml`. Two real findings came out of that: (1) the sensor constants were significantly wrong as placeholders — real azimuth resolution is 2048 columns/rev, not the assumed 1024, and the real vertical FOV is +17.0/-16.4° (33.5° span), not ±22.5° (45°); (2) the gate's own within/between-ring measured-vs-predicted plot does *not* cleanly validate on this off-road dataset the way it does on flat urban scenes — diagnosed and documented in that script's module docstring (off-road terrain decorrelates a ring's return range from azimuth, which the gate's range-then-ring binning assumes doesn't happen; this is a methodology caveat for cluttered natural terrain, not evidence the measured constants are wrong — they're independently cross-validated to ~1e-6° agreement across all 5 sequences). **The nuScenes/HDL-32E half of #6/#7 remains open** — nuScenes-mini still hasn't been downloaded in this environment, so `sensor_hdl32e.yaml`'s `h_m: 1.84` is still an un-measured placeholder. Once nuScenes-mini is available, call `validate_point_distribution()` and `cross_check_mount_height()` against real sweeps and look at `eval/out/sensor_validation.png` yourself — do not treat the synthetic-data tests as having already cleared that half of the gate.
+### Memory
 
-**#8 status, updated 2026-09-11:** the RELLIS-3D numeric ID cross-check has been substantially expanded — from 20 frames in one sequence to 783 frames sampled across all 5 local sequences, confirming 17 of 20 mapped IDs against real data (up from 9), with zero surprise/unmapped IDs found (see `perception/taxonomy.py`'s module docstring for the full list). Three IDs remain unconfirmed — `dirt` (1), `sky` (7), `building` (12) — the last two plausibly because these 5 sequences' specific routes never pass a building, and LiDAR may never produce a `sky` return at all (no physical surface to reflect off), which would make that one a structural non-gap rather than a data gap. An authoritative `ontology.yaml` still hasn't been found; `perception/taxonomy.py`'s RELLIS dict stays keyed by name for the same reason as before.
+Foveated clipmap: **12.58 MB** vs. **201.3 MB** for a dense uniform 2.5D grid at the same extent — an honest **16×** reduction (quoted against a realistic dense 2.5D baseline, not a 3D strawman).
 
-**Status, updated 2026-09-11 — this line is well past Phase 0 now:** Phases 1–4 (the clipmap, cells, perception/training, observability/negative obstacles — Tickets #10–#37) are built and tested, plus Ticket #17 (foveated height quantum) and Tickets #31/#32 below. See `HANDOFF.md` for the full ticket-by-ticket build log; Phase 5 onward (Tickets #38+, the sparsity trap and speed envelope) is not yet started.
+### Physics validated by measurement
 
-**#31 (cache inference), done 2026-09-11:** `eval/cache_inference.py` runs the trained checkpoint (`checkpoints_multi_remote/checkpoint.pt`, epoch 19, val mIoU 0.562 — see `TRAINING_RESULTS.md`) over real RELLIS-3D frames **offline** and saves per-point predicted labels to `.npy`, one file per frame, plus a `manifest.json` recording measured latency (P50/P95, ~500ms/frame on CPU at this project's real 64×2048 resolution). **These cached labels are precomputed, not live** — nothing in this repo runs the segmentation network in real time, and any demo or checkpoint using them should say so explicitly, per the Build Map's own warning against presenting cached labels as live inference.
+Hazard detection ranges predicted by the sensor model (HDL-64E configuration) were compared with measured detection rates: a 15 cm kerb was predicted at 20.2 m and measured at 18.4 m; a 2 m ditch was predicted at 21.6 m and measured at 20.6 m, **within ~10 % of theory**. The 2 m ditch degrades gradually with range, matching the Sparsity Trap's expected-return model rather than failing at a cliff.
 
-**#32 (semantic map checkpoint), done 2026-09-11:** `eval/checkpoint_semantic_map.py` renders one real RELLIS-3D frame's 2.5D map twice — once coloured by ground truth, once by #31's cached predictions — side by side, using the frame's own recorded pose (world-anchored, not an assumed origin). Deviates from the literal ticket text (which compares against Ticket #22's synthetic scene) by using real data throughout instead, now that real data and a real trained checkpoint both exist locally — see that module's own docstring for the full reasoning.
+![Hazard detection vs range, predicted vs measured](eval/out/checkpoint_detection_vs_range.png)
 
-## Layout
+### Memory versus fidelity
+
+Sweeping the fovea parameter gamma trades memory against elevation error, using the map's own agreement across resolution levels (no ground-truth labels needed). Almost all of the memory saving is captured immediately past gamma = 0: memory falls from about 200 MB to single-digit MB while elevation deviation stays around 1 cm at the chosen operating point.
+
+![Memory versus elevation deviation Pareto curve](eval/out/checkpoint_pareto.png)
+
+### Negative obstacle: 2D occupancy versus DRISHTI (synthetic scene)
+
+On a synthetic sweep with a ditch, a plain 2D occupancy grid shows only a blank disc that is indistinguishable from "not yet observed", while DRISHTI's negative-obstacle pipeline flags the ditch cells.
+
+![Plain 2D occupancy grid versus DRISHTI negative-obstacle detection](eval/out/checkpoint_trench.png)
+
+### Tracking on a real continuous sequence
+
+200 contiguous frames of RELLIS-3D sequence 00000 through the Kalman tracker (real world-frame ego-pose compensation): 83 tracks created, up to 13 simultaneously confirmed, confirmed-track speed mean 0.55 m/s — ego motion cancels correctly, with no runaway-velocity artifacts.
+
+### Cross-dataset generality
+
+The same architecture adapts to other sensors and environments with small fine-tunes:
+
+| Dataset / sensor | Result |
+|---|---|
+| SemanticPOSS (Hesai Pandar40P, campus) | **0.579 mIoU**; PEDESTRIAN 0.576; DRIVABLE 0.811 |
+| nuScenes-mini (Velodyne HDL-32E, urban) | **0.739 DRIVABLE IoU** after a 5-minute fine-tune |
+
+The model natively accepts different beam counts and resolutions (32-, 40-, 64-beam sensors) without architectural changes.
+
+---
+
+## Positioning against prior art
+
+- **Negative-obstacle detection** builds on the *range-shadow* cue pioneered by NASA JPL for DARPA Demo III and fielded on TerraMax in the 2005 DARPA Grand Challenge, and still the active technique in 2024 literature. DRISHTI adds what that fixed-resolution, pre-deep-learning work lacked: a **sensor-derived variable-resolution map**, a **fused deep segmentation network**, the **Sparsity Trap** conservatism default, and an **open, tested, reproducible pipeline**.
+- **DARPA RACER** independently found that dense semantic classification adds enough latency to mislead planners at 7–10 m/s — exactly the failure mode DRISHTI's variable-resolution mapping and perception-limited speed envelope are designed around.
+- **DRDO's currently documented UGVs** (Daksh, Muntra) are teleoperated / waypoint-autonomous; adaptive-resolution 2.5D mapping with geometry-based negative-obstacle reasoning is a capability-level step beyond what is publicly documented.
+
+---
+
+## Interactive story demo
+
+`story/` is a scroll-driven 3D walkthrough (SvelteKit + Threlte / Three.js) that plays the pipeline on **real exported RELLIS-3D data**: the raw sweep, the 3D→2.5D cell conversion, the classification pulse on a detected hazard, the HUD readout of the live speed envelope, a pedestrian-avoidance lane change, and a chase-cam + top-down minimap. No backend required — it reads pre-baked static files.
+
+```bash
+cd story
+npm install
+npm run dev          # http://localhost:5174
+```
+
+Regenerate the real frame it displays:
+
+```bash
+python -m eval.export_story_frames --sequence-dir data/rellis/00000 --frame 50
+```
+
+`frontend/` is the earlier React dashboard.
+
+---
+
+## Project Structure
 
 ```
-sensor/         SensorModel, resolution schedule (#4, #5)
-perception/     dataset loaders → canonical Sweep struct (#2, #3)
-grid/           clipmap, addressing, cells                  [not yet built]
-observability/  ray traversal, four-state grid, negative obstacles [not yet built]
-temporal/       static accumulation, motion detection        [not yet built]
-attention/      TTC fovea controller                         [not yet built]
-planning/       speed envelope, conservatism, cost map        [not yet built]
-viz/            rerun dashboard                               [not yet built]
-eval/           metrics, baselines, latency                   [not yet built]
+sensor/         SensorModel, resolution schedule, extrinsic calibration
+perception/     loaders (RELLIS-3D, nuScenes, SemanticPOSS), range image, FusionSegNet,
+                losses, training, taxonomy, ground prior, TTA
+grid/           clipmap, addressing, cells, scatter, temporal occupancy
+observability/  ray-cast, four-state grid, negative obstacles, Sparsity Trap
+temporal/       static accumulation, motion, Kalman entity tracker
+attention/      time-to-contact fovea controller
+planning/       traversability, cost map, A*, speed envelope, friction, conservatism
+eval/           metrics, benchmarks, latency, detection-vs-range, figures (eval/out)
 configs/        sensor_*.yaml, vehicle_ugv.yaml
-tests/          pytest suite, one file per module
-scripts/        one-off / download scripts, not imported by the package
+tests/          380+ pytest tests, one file per module
+story/          scroll-driven 3D story demo (Svelte + Threlte)
+frontend/       React dashboard
 ```
 
-## Setup
+---
 
-Colab:
+## Installation
 
-```
-!git clone <this-repo-url> drishti
-%cd drishti
-!pip install -q -r requirements.txt
-!pytest -q
-```
-
-Local:
-
-```
+```bash
+git clone <this-repo-url> drishti
+cd drishti
 pip install -r requirements.txt
-pytest -q
 ```
 
-## Running the tests
+Datasets: **RELLIS-3D** (all 5 sequences, `scripts/download_rellis.sh`), plus optional **nuScenes-mini** (`NUSCENES_DATAROOT`) and **SemanticPOSS** for the cross-dataset results.
 
-```
-pytest -q                          # everything built so far
-pytest -q tests/test_sensor_model.py
-pytest -q tests/test_schedule.py
-pytest -q tests/test_nuscenes_loader.py   # needs nuScenes-mini on disk, see below
-```
+Every sensor number lives in `configs/*.yaml` and every vehicle number in `configs/vehicle_ugv.yaml` — nothing is hardcoded, so swapping the sensor regenerates the whole map schedule.
 
-## nuScenes-mini
+---
 
-`tests/test_nuscenes_loader.py` needs the nuScenes-mini devkit data.
-Download it from https://www.nuscenes.org/download (the "Mini" split, ~4 GB)
-and point `NUSCENES_DATAROOT` at the extracted folder:
+## Testing
 
-```
-export NUSCENES_DATAROOT=/path/to/v1.0-mini
-pytest -q tests/test_nuscenes_loader.py
+```bash
+pytest -q                                              # full suite (380+ tests)
+pytest -q tests/test_conservatism.py                   # Conservatism Invariant, 10,000 generated cases
+pytest -q tests/test_ground_prior_numba_equivalence.py # JIT ground prior is bit-identical to the reference
+pytest -q tests/test_tta.py                            # test-time augmentation correctness
 ```
 
-Without that variable set, the nuScenes tests are skipped (not failed) —
-`sensor_model` and `schedule` tests do not need any dataset and always run.
+Sensor and vehicle constants are guarded by a repo-wide test (`tests/test_vehicle_config.py`) that fails if a config value appears as a literal anywhere outside `configs/`.
 
-## RELLIS-3D
+---
 
-`scripts/download_rellis.sh` pulls sequence `00004`'s KITTI-format point
-clouds from the official RELLIS-3D Google Drive distribution.
+## Glossary
 
-**Correction as of 2026-09-10:** the KITTI-format data is not published
-per-sequence — it's one combined archive across all 5 sequences (14GB for
-the Ouster OS1-64 stream, 5.58GB for Velodyne). The script downloads that
-combined archive and extracts only the `00004/` subfolder into
-`<dest>/rellis/00004/`, then tells you to delete the rest. (There is a
-separate, genuinely per-sequence "synced" ROS bag download for `00004`
-alone at ~7GB — but that's rosbag format, not usable by this loader
-without bag-extraction tooling this repo doesn't have, so don't use it
-here.)
+| Term | Meaning |
+|---|---|
+| 2.5D map | A 2D grid where each cell stores height information; cheaper than 3D, richer than occupancy |
+| Foveation | Allocating detail non-uniformly, finest where it matters |
+| Range image | A LiDAR scan laid out as an image indexed by (beam ring, azimuth), the sensor's native layout |
+| Clipmap | A stack of nested power-of-two-resolution grids centred on the viewer |
+| Toroidal addressing | Indexing a fixed array with wrap-around so a moving window costs an index shift, not a copy |
+| Deskew | Correcting for vehicle motion during one LiDAR rotation |
+| Lovasz-Softmax | A convex surrogate for IoU; optimises mIoU directly |
+| Negative obstacle | A hazard below the ground plane (ditch, trench, crater) invisible to 2D occupancy grids |
+| Range shadow | The extra distance a beam travels when the ground drops away |
+| Sparsity Trap | A thin object at range returning too few points to distinguish from noise |
+| TTC | Time-to-contact: how long until the vehicle reaches a point at current closing speed |
+| PROVISIONAL | A cell inherited from a coarser level, usable for coarse routing only |
+| Conservatism invariant | Degrading a cell's evidence can never lower its reported cost |
+| Perception-limited speed | Fastest speed at which stopping distance still fits inside detection range |
 
-This is a background/detachable step (Ticket #3) — nothing else in the
-build depends on it landing on time. See the ticket in the Build Map for
-why `00004` specifically and why RELLIS-3D replaced SemanticKITTI as the
-background dataset.
+---
 
-`configs/sensor_ouster_os1_64.yaml` ships with **placeholder** `d_theta_rad`
-/ `d_phi_rad` values marked `# TODO: measure via Ticket #6`. Do not trust
-numbers computed from this config until Ticket #6 (point-distribution gate)
-has been run against real RELLIS-3D scans — there is no verified datasheet
-value for the Ouster OS1-64's angular resolution anywhere in this repo.
+## Documentation
 
-## A note for whoever is prompting a model to write the next ticket
+- [`DRISHTI_MASTER_BIBLE.md`](DRISHTI_MASTER_BIBLE.md) — full theory, architecture, training history and results
+- `DRISHTI_Build_Map.md` — ticket-by-ticket build order and acceptance criteria
+- `HANDOFF.md` — session-by-session build log
+- `eval/out/` — figures behind every benchmark above
 
-Every function in `sensor/` is a pure function of a config object — no
-module-level constants, no hardcoded sensor numbers. If you ask a model to
-extend this and it produces a literal like `0.1728` outside a `configs/*.yaml`
-file, that is a bug per the Build Map's own rule for Ticket #4 and #9.
+---
+
+<div align="center">
+
+**Team Phir Hera Pheri** · Smart India Hackathon 2026 · DRDO PS 26053
+
+</div>

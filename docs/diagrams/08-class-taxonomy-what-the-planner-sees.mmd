@@ -1,0 +1,22 @@
+flowchart LR
+    subgraph NET["Predicted by the network"]
+        DR["1 DRIVABLE<br/>full speed"]
+        CA["2 CAUTION<br/>speed / cost penalty"]
+        NT["3 NON_TRAVERSABLE"]
+        SO["4 STATIC_OBSTACLE<br/>walls, poles, fences, logs"]
+        VG["5 VEGETATION<br/>solid to LiDAR, often passable"]
+        VH["6 VEHICLE<br/>tracked, has velocity"]
+        PD["7 PEDESTRIAN<br/>highest protection priority"]
+    end
+    subgraph GEOM["Derived from geometry only"]
+        NO["8 NEGATIVE_OBSTACLE<br/>ditch, trench, crater"]
+        OH["9 OVERHANG<br/>branch, low ceiling"]
+    end
+    UK["0 UNKNOWN<br/>never observed, or past the blind range"]
+    GEOM -. "machine-checked at import:<br/>no dataset label may map here" .-> NET
+    classDef n fill:#2a1f45,stroke:#a78bfa,color:#f0eaff
+    classDef g fill:#4a2a12,stroke:#fb923c,color:#fff1e6
+    classDef u fill:#2b2f36,stroke:#94a3b8,color:#e2e8f0
+    class DR,CA,NT,SO,VG,VH,PD n
+    class NO,OH g
+    class UK u

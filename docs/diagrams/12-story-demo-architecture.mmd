@@ -1,0 +1,16 @@
+flowchart LR
+    RAW["Real RELLIS-3D frame<br/>+ trained checkpoint"] --> EXP["eval/export_story_frames.py"]
+    EXP --> BIN[("static/data/<br/>baseline_frame.bin")]
+    BIN --> LOAD["Pre-allocated point buffer<br/>setDrawRange, no per-frame allocation"]
+    SCROLL["Scroll position"] --> IO["IntersectionObserver"] --> STATE[("activeBeat state")]
+    STATE --> SCENE["Threlte scene"]
+    LOAD --> SCENE
+    SCENE --> CAM["Chase cam + top-down minimap<br/>one renderer, two scissored passes"]
+    SCENE --> FX["Classification pulse, hazard void,<br/>2.5D cell grid, pedestrian swerve"]
+    SCENE --> HUD["HUD leader-line<br/>live speed envelope"]
+    classDef a fill:#1b2a41,stroke:#4fa8ff,color:#e8f1ff
+    classDef b fill:#12384a,stroke:#22d3ee,color:#e0fbff
+    classDef c fill:#4a1a2a,stroke:#f472b6,color:#ffe8f1
+    class RAW,EXP,BIN,LOAD a
+    class SCROLL,IO,STATE b
+    class SCENE,CAM,FX,HUD c

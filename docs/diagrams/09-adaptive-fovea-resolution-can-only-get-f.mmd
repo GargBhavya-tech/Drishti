@@ -1,0 +1,10 @@
+flowchart LR
+    R["c_range(r)<br/>sensor-derived floor"] --> MIN{{"min( )"}}
+    T["c_ttc(p)<br/>time-to-contact refinement"] --> MIN
+    B["c_boundary<br/>cell-edge refinement"] --> MIN
+    MIN --> C["final cell size c(p)"]
+    C --> SAFE["Never coarser than the sensor floor<br/>a bad velocity estimate cannot degrade the map"]
+    classDef a fill:#12384a,stroke:#22d3ee,color:#e0fbff
+    classDef b fill:#3a3a10,stroke:#facc15,color:#fffbe0
+    class R,T,B,C a
+    class MIN,SAFE b
