@@ -4,6 +4,8 @@ __pycache__/
 eval/out/*
 !eval/out/*.png
 data/
+brag-output/
+brag-output-2026-09-20-192621/
 # `data/` above targets the RELLIS-3D dataset at the repo root
 # (data/rellis/...) -- gitignore patterns with no leading slash match a
 # directory of that name at ANY depth, so it was also silently excluding

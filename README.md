@@ -6,7 +6,7 @@
 
 *Adaptive variable-resolution 2.5D LiDAR mapping for autonomous off-road ground vehicles*
 
-**Smart India Hackathon 2026 · DRDO Problem Statement 26053 · Team Phir Hera Pheri**
+**Smart India Hackathon 2026 · DRDO Problem Statement 26053 · Team Chole Bhature**
 
 </div>
 
@@ -395,6 +395,6 @@ Sensor and vehicle constants are guarded by a repo-wide test (`tests/test_vehicl
 
 <div align="center">
 
-**Team Phir Hera Pheri** · Smart India Hackathon 2026 · DRDO PS 26053
+**Team Chole Bhature** · Smart India Hackathon 2026 · DRDO PS 26053
 
 </div>

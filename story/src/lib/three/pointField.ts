@@ -40,6 +40,7 @@ export function createPointField(): Points {
 	geometry.setAttribute('position', new Float32BufferAttribute(positions, 3));
 	geometry.setAttribute('color', new Float32BufferAttribute(colors, 3));
 	geometry.setAttribute('alpha', new Float32BufferAttribute(alphas, 1));
+	geometry.setAttribute('semColor', new Float32BufferAttribute(new Float32Array(MAX_POINTS * 3), 3));
 	geometry.setDrawRange(0, 0);
 
 	const material = new ShaderMaterial({
@@ -47,6 +48,7 @@ export function createPointField(): Points {
 			pointTexture: { value: makeSpriteTexture() },
 			size: { value: 2.2 },
 			opacity: { value: 0.85 },
+			semantic: { value: 0 },
 			// Classification-pulse (Bible-adjacent "trick" beat): a shockwave
 			// expanding from pulseCenter, radius = pulseElapsed * speed.
 			// pulseElapsed < 0 means inactive -- no pulse contribution at all.
@@ -59,14 +61,16 @@ export function createPointField(): Points {
 		vertexShader: `
 			attribute vec3 color;
 			attribute float alpha;
+			attribute vec3 semColor;
 			varying vec3 vColor;
 			varying float vAlpha;
 			varying float vPulse;
 			uniform float size;
+			uniform float semantic;
 			uniform vec3 pulseCenter;
 			uniform float pulseElapsed;
 			void main() {
-				vColor = color;
+				vColor = mix(color, semColor, semantic);
 				vAlpha = alpha;
 
 				vPulse = 0.0;
@@ -100,6 +104,21 @@ export function createPointField(): Points {
 	const points = new Points(geometry, material);
 	points.frustumCulled = false;
 	return points;
+}
+
+/** DrishtiClass id -> RGB (0..1) for the optional semantic colouring. */
+const CLASS_RGB: Record<number, [number, number, number]> = {
+	1: [0.25, 0.72, 1.0], // DRIVABLE
+	2: [0.75, 0.6, 0.2], // CAUTION
+	4: [1.0, 0.33, 0.2], // STATIC_OBSTACLE
+	5: [0.18, 0.68, 0.32], // VEGETATION
+	6: [1.0, 0.54, 0.19], // VEHICLE
+	7: [1.0, 0.87, 0.33] // PEDESTRIAN
+};
+
+/** Blend uniform: 0 = intensity colours, 1 = predicted class colours. */
+export function setSemanticMix(points: Points, mix: number) {
+	(points.material as ShaderMaterial).uniforms.semantic.value = mix;
 }
 
 /** Updates the classification-pulse uniforms every frame (see Scene.svelte). */
@@ -186,14 +205,29 @@ export function fillSyntheticScatter(points: Points, count: number) {
  * zero-padded (x=y=z=0). Those are filtered out here rather than rendered
  * as a false cluster of points at the sensor origin.
  */
-export async function loadRealFrame(points: Points, binUrl: string): Promise<number> {
+export async function loadRealFrame(
+	points: Points,
+	binUrl: string,
+	labelsUrl?: string
+): Promise<number> {
 	const buf = await fetch(binUrl).then((r) => r.arrayBuffer());
+	// Real FusionSegNet predictions, one uint8 per slot (eval/export_story_labels.py).
+	let labels: Uint8Array | null = null;
+	if (labelsUrl) {
+		try {
+			const r = await fetch(labelsUrl);
+			if (r.ok) labels = new Uint8Array(await r.arrayBuffer());
+		} catch {
+			labels = null;
+		}
+	}
 	const data = new Float32Array(buf);
 	const totalSlots = data.length / 4;
 
 	const geometry = points.geometry;
 	const posAttr = geometry.getAttribute('position') as Float32BufferAttribute;
 	const colorAttr = geometry.getAttribute('color') as Float32BufferAttribute;
+	const semAttr = geometry.getAttribute('semColor') as Float32BufferAttribute;
 
 	let n = 0;
 	for (let i = 0; i < totalSlots && n < MAX_POINTS; i++) {
@@ -211,11 +245,14 @@ export async function loadRealFrame(points: Points, binUrl: string): Promise<num
 
 		const t = Math.min(Math.max(intensity, 0), 1);
 		colorAttr.setXYZ(n, 0.1 + t * 0.5, 0.4 + t * 0.4, 0.5 + t * 0.3);
+		const rgb = (labels && CLASS_RGB[labels[i]]) || [0.35, 0.42, 0.5];
+		semAttr.setXYZ(n, rgb[0], rgb[1], rgb[2]);
 		n++;
 	}
 
 	posAttr.needsUpdate = true;
 	colorAttr.needsUpdate = true;
+	semAttr.needsUpdate = true;
 	geometry.setDrawRange(0, n);
 	geometry.computeBoundingSphere();
 	return n;

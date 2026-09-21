@@ -1,7 +1,7 @@
 # DRISHTI — The Master Bible
 
 *Distance-Resolved Instantaneous Semantic Height & Traversability Imaging*
-*Smart India Hackathon 2026 · DRDO Problem Statement 26053 · Team Phir Hera Pheri*
+*Smart India Hackathon 2026 · DRDO Problem Statement 26053 · Team Chole Bhature*
 
 **This is the single consolidated reference for the whole project** — theory, architecture, real training data and results, the accuracy-improvement work, the frontend/demo, prior-art positioning, honest limitations, and how to run everything. It merges `DRISHTI_Project_Bible_v3.md` (why), `DRISHTI_Build_Map.md` (what/when, referenced not reproduced), `HANDOFF.md` (session-by-session build log), `TRAINING_RESULTS.md`, `BASELINE_COMPARISON.md`, `RESEARCH_FINDINGS.md`, and `README.md` into one document, organized to read start-to-end with zero prior context.
 

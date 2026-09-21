@@ -9,6 +9,7 @@
 		fillSyntheticScatter,
 		loadRealFrame,
 		setPulseUniforms,
+		setSemanticMix,
 		setVoidCarve
 	} from '$lib/three/pointField';
 	import { createClipmapGrid, buildGridFromPoints } from '$lib/three/clipmapGrid';
@@ -37,7 +38,7 @@
 	fillSyntheticScatter(pointField, 4_000);
 	const clipmapGrid = createClipmapGrid();
 	let usingRealFrame = $state(false);
-	loadRealFrame(pointField, '/data/baseline_frame.bin')
+	loadRealFrame(pointField, '/data/baseline_frame.bin', '/data/baseline_frame_labels.bin')
 		.then((n) => {
 			usingRealFrame = true;
 			console.log(`[story] loaded real frame: ${n} points`);
@@ -48,6 +49,13 @@
 		.catch((err) => {
 			console.warn('[story] real frame not found, keeping synthetic scatter', err);
 		});
+
+	// Capture hook for the launch video (brag-output): lets a recorder blend the
+	// real point cloud to its predicted class colours. No effect on the story UI.
+	if (typeof window !== 'undefined') {
+		(window as unknown as { __drishtiSemantic: (m: number) => void }).__drishtiSemantic = (m) =>
+			setSemanticMix(pointField, m);
+	}
 
 	let chaseCam: THREE.PerspectiveCamera | undefined = $state();
 	let topCam: THREE.OrthographicCamera | undefined = $state();
